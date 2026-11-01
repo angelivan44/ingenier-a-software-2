@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/angelhuayas/acortador-enlaces/internal/links"
-	"github.com/angelhuayas/acortador-enlaces/internal/server"
+	"github.com/angelivan44/ingenier-a-software-2/internal/links"
+	"github.com/angelivan44/ingenier-a-software-2/internal/server"
 )
 
 func main() {

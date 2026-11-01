@@ -11,8 +11,8 @@ Proyecto del curso Ingeniería de Software 2, Universidad Continental.
 ## Instalación
 
 ```bash
-git clone https://github.com/angelhuayas/acortador-enlaces.git
-cd acortador-enlaces
+git clone https://github.com/angelivan44/ingenier-a-software-2.git
+cd ingenier-a-software-2
 ```
 
 ## Ejecución
