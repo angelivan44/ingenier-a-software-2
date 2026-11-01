@@ -45,6 +45,12 @@ Respuesta (`201 Created`):
 
 Si la URL no es `http` o `https`, o no incluye dominio, responde `400 Bad Request`.
 
+Abrir un enlace corto redirige a la URL original (`302 Found`). Si el código no existe, responde `404 Not Found`:
+
+```bash
+curl -i http://localhost:3000/aZ3kP9q
+```
+
 Por ahora los enlaces se guardan en memoria y se pierden al reiniciar el servidor.
 
 ## Pruebas

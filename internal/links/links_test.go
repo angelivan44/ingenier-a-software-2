@@ -22,6 +22,42 @@ func (f *fakeStore) Save(context.Context, Link) error {
 	return nil
 }
 
+func (f *fakeStore) Find(context.Context, string) (Link, error) {
+	return Link{}, f.err
+}
+
+func TestResolveDevuelveElEnlaceCreado(t *testing.T) {
+	service := NewService(NewMemoryStore())
+	creado, err := service.Create(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	encontrado, err := service.Resolve(context.Background(), creado.Code)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if encontrado.URL != "https://example.com" {
+		t.Errorf("URL = %q", encontrado.URL)
+	}
+}
+
+func TestResolveFallaSiElCodigoNoExiste(t *testing.T) {
+	_, err := NewService(NewMemoryStore()).Resolve(context.Background(), "noexiste")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, se esperaba ErrNotFound", err)
+	}
+}
+
+func TestResolveConservaErroresDelAlmacenamiento(t *testing.T) {
+	errBase := errors.New("base de datos caída")
+
+	_, err := NewService(&fakeStore{err: errBase}).Resolve(context.Background(), "abc1234")
+	if !errors.Is(err, errBase) {
+		t.Fatalf("error = %v, se esperaba el error original", err)
+	}
+}
+
 func TestCreateGuardaEnlaceConCodigoValido(t *testing.T) {
 	service := NewService(NewMemoryStore())
 

@@ -19,6 +19,10 @@ func (failingStore) Save(context.Context, links.Link) error {
 	return errors.New("base de datos caída")
 }
 
+func (failingStore) Find(context.Context, string) (links.Link, error) {
+	return links.Link{}, errors.New("base de datos caída")
+}
+
 func newTestHandler() http.Handler {
 	return New(links.NewService(links.NewMemoryStore()))
 }
@@ -79,6 +83,57 @@ func TestCreateLinkRechazaPeticionesInvalidas(t *testing.T) {
 				t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusBadRequest)
 			}
 		})
+	}
+}
+
+func get(handler http.Handler, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestRedirectEnviaALaURLOriginal(t *testing.T) {
+	handler := newTestHandler()
+	created := postLink(handler, `{"url":"https://example.com/articulo?id=1"}`)
+
+	var link linkResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &link); err != nil {
+		t.Fatalf("respuesta no es JSON: %v", err)
+	}
+
+	rec := get(handler, "/"+link.Code)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusFound)
+	}
+	if got := rec.Header().Get("Location"); got != "https://example.com/articulo?id=1" {
+		t.Errorf("Location = %q", got)
+	}
+}
+
+func TestRedirectRespondeNotFoundSiNoExiste(t *testing.T) {
+	rec := get(newTestHandler(), "/noexiste")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestRedirectNoExponeErroresInternos(t *testing.T) {
+	rec := get(New(links.NewService(failingStore{})), "/abc1234")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "base de datos") {
+		t.Fatalf("la respuesta expone el error interno: %s", rec.Body)
+	}
+}
+
+func TestHealthNoChocaConLaRutaDeCodigos(t *testing.T) {
+	if rec := get(newTestHandler(), "/health"); rec.Code != http.StatusOK {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusOK)
 	}
 }
 
