@@ -66,6 +66,33 @@ Si la variable `DATABASE_URL` está definida, los enlaces se guardan en Postgres
 DATABASE_URL="postgres://usuario:clave@localhost:5432/acortador" go run ./cmd/api
 ```
 
+## Docker
+
+Levanta el servidor y un Postgres local, sin instalar Go:
+
+```bash
+docker compose up --build
+```
+
+## Entornos
+
+| Entorno | Dónde se ejecuta | Base de datos | Quién accede |
+|---|---|---|---|
+| Desarrollo | Máquina local, con `go run` o Docker | Memoria o Postgres local | El desarrollador |
+| Prueba | Vista previa de Vercel y GitHub Actions | Rama de Neon y Postgres temporal | El desarrollador |
+| Producción | Vercel, desde `main` | Neon | Cualquier usuario |
+
+Las variables están descritas en `.env.example`. En Vercel, `DATABASE_URL` la define la integración con Neon y no se guarda en el repositorio.
+
+## Despliegue
+
+El proyecto usa el preset de Go de Vercel, configurado en `vercel.json`:
+
+- Un push a `main` despliega a producción.
+- Un push a otra rama crea una vista previa con su propia URL.
+
+Para un despliegue propio, crea un proyecto en Vercel desde este repositorio y define `DATABASE_URL`. El runtime de Go en Vercel está en Beta; `Dockerfile` permite ejecutar el proyecto en cualquier otro servicio.
+
 ## Pruebas
 
 ```bash
