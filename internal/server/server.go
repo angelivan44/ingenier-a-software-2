@@ -2,6 +2,7 @@
 package server
 
 import (
+	_ "embed" // Permite incluir index.html dentro del binario.
 	"encoding/json"
 	"errors"
 	"log"
@@ -14,6 +15,9 @@ import (
 // maxBodyBytes limita el tamaño del cuerpo para rechazar peticiones abusivas.
 const maxBodyBytes = 4 << 10
 
+//go:embed index.html
+var indexPage []byte
+
 // Server agrupa las dependencias de los manejadores HTTP.
 type Server struct {
 	links *links.Service
@@ -24,11 +28,20 @@ func New(service *links.Service) http.Handler {
 	s := &Server{links: service}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/links", s.createLink)
 	mux.HandleFunc("GET /api/links/{code}", s.linkStats)
 	mux.HandleFunc("GET /{code}", s.redirect)
 	return mux
+}
+
+// home muestra la página para crear enlaces desde el navegador.
+func (s *Server) home(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := w.Write(indexPage); err != nil {
+		log.Printf("no se pudo escribir la página: %v", err)
+	}
 }
 
 // health permite comprobar que el servicio está activo.

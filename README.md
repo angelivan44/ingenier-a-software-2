@@ -4,6 +4,8 @@ Servicio web en Go para crear enlaces cortos, redirigir a la URL original y cons
 
 Proyecto del curso Ingeniería de Software 2, Universidad Continental.
 
+**Aplicación en producción:** https://acortador-enlaces-hazel.vercel.app
+
 ## Requisitos
 
 - Go 1.25 o superior
@@ -29,6 +31,8 @@ curl http://localhost:3000/health
 ```
 
 ## Uso
+
+La página principal permite crear enlaces, copiarlos y consultar sus clics desde el navegador. También se puede usar la API.
 
 Crear un enlace corto:
 
