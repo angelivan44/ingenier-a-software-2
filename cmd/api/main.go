@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/angelhuayas/acortador-enlaces/internal/links"
 	"github.com/angelhuayas/acortador-enlaces/internal/server"
 )
 
@@ -16,6 +17,8 @@ func main() {
 		port = "3000"
 	}
 
+	service := links.NewService(links.NewMemoryStore())
+
 	log.Printf("servidor escuchando en el puerto %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, server.New()))
+	log.Fatal(http.ListenAndServe(":"+port, server.New(service)))
 }
