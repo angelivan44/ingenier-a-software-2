@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/angelhuayas/acortador-enlaces/internal/links"
+	"github.com/angelivan44/ingenier-a-software-2/internal/links"
 )
 
 // failingStore simula una falla del almacenamiento.
