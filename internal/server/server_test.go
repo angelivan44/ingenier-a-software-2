@@ -38,6 +38,23 @@ func postLink(handler http.Handler, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+func TestHomeMuestraElFormulario(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	newTestHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), `id="formulario"`) {
+		t.Error("la página no incluye el formulario")
+	}
+}
+
 func TestHealth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
