@@ -25,6 +25,7 @@ func New(service *links.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/links", s.createLink)
+	mux.HandleFunc("GET /{code}", s.redirect)
 	return mux
 }
 
@@ -68,6 +69,24 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		URL:      link.URL,
 		ShortURL: baseURL(r) + "/" + link.Code,
 	})
+}
+
+// redirect envía al visitante a la URL original del enlace.
+func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
+	link, err := s.links.Resolve(r.Context(), r.PathValue("code"))
+	if errors.Is(err, links.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "enlace no encontrado")
+		return
+	}
+	if err != nil {
+		log.Printf("no se pudo resolver el enlace: %v", err)
+		writeError(w, http.StatusInternalServerError, "no se pudo resolver el enlace")
+		return
+	}
+
+	// 302 y no 301: el navegador no guarda la redirección en caché,
+	// así cada visita pasa por el servidor y se podrá contar como clic.
+	http.Redirect(w, r, link.URL, http.StatusFound)
 }
 
 // baseURL arma la dirección pública a partir de la petición recibida.

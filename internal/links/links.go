@@ -23,6 +23,8 @@ var (
 	ErrInvalidURL = errors.New("la URL debe ser http o https e incluir un dominio")
 	// ErrCodeExists indica que el código generado ya está en uso.
 	ErrCodeExists = errors.New("el código ya existe")
+	// ErrNotFound indica que no hay un enlace con ese código.
+	ErrNotFound = errors.New("enlace no encontrado")
 )
 
 // Link es un enlace corto y la URL a la que apunta.
@@ -36,6 +38,7 @@ type Link struct {
 // se puede cambiar sin tocar las reglas de negocio.
 type Store interface {
 	Save(ctx context.Context, link Link) error
+	Find(ctx context.Context, code string) (Link, error)
 }
 
 // Service aplica las reglas para crear enlaces.
@@ -72,6 +75,15 @@ func (s *Service) Create(ctx context.Context, rawURL string) (Link, error) {
 		}
 	}
 	return Link{}, fmt.Errorf("sin código libre tras %d intentos: %w", maxAttempts, ErrCodeExists)
+}
+
+// Resolve busca el enlace asociado a un código.
+func (s *Service) Resolve(ctx context.Context, code string) (Link, error) {
+	link, err := s.store.Find(ctx, code)
+	if err != nil {
+		return Link{}, fmt.Errorf("buscar enlace: %w", err)
+	}
+	return link, nil
 }
 
 // validateURL acepta solo URLs absolutas http o https con dominio.

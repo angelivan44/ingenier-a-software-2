@@ -28,3 +28,15 @@ func (m *MemoryStore) Save(_ context.Context, link Link) error {
 	m.links[link.Code] = link
 	return nil
 }
+
+// Find devuelve el enlace o ErrNotFound si el código no existe.
+func (m *MemoryStore) Find(_ context.Context, code string) (Link, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	link, exists := m.links[code]
+	if !exists {
+		return Link{}, ErrNotFound
+	}
+	return link, nil
+}
