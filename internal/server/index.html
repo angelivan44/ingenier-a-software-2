@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acortador de enlaces</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fondo: #f6f6f4;
+      --texto: #1c1c1a;
+      --suave: #62625c;
+      --borde: #cfcfc8;
+      --panel: #ffffff;
+      --acento: #0f6b5c;
+      --error: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fondo: #161614;
+        --texto: #ececE5;
+        --suave: #a2a29a;
+        --borde: #3b3b36;
+        --panel: #20201d;
+        --acento: #5cc9b3;
+        --error: #f2867e;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: var(--fondo);
+      color: var(--texto);
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+    main { width: 100%; max-width: 480px; }
+    h1 { margin: 0 0 4px; font-size: 1.6rem; }
+    p { margin: 0 0 24px; color: var(--suave); }
+    label { display: block; margin-bottom: 8px; font-weight: 600; }
+    form { display: flex; flex-wrap: wrap; gap: 8px; }
+    label { flex-basis: 100%; }
+    input {
+      flex: 1 1 220px;
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--borde);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--texto);
+      font: inherit;
+    }
+    button {
+      padding: 10px 16px;
+      border: 1px solid var(--acento);
+      border-radius: 8px;
+      background: var(--acento);
+      color: var(--panel);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secundario { background: transparent; color: var(--acento); }
+    #error { margin-top: 12px; color: var(--error); }
+    #resultado {
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px solid var(--borde);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow-wrap: anywhere;
+    }
+    #resultado a { color: var(--acento); font-weight: 600; }
+    .acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+    #clics { color: var(--suave); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Acortador de enlaces</h1>
+    <p>Pega una dirección larga y obtén un enlace corto.</p>
+
+    <form id="formulario">
+      <label for="url">Dirección web</label>
+      <input id="url" type="url" placeholder="https://ejemplo.com/articulo" required>
+      <button type="submit">Acortar</button>
+    </form>
+    <div id="error" role="alert" hidden></div>
+
+    <section id="resultado" aria-live="polite" hidden>
+      <a id="enlace" target="_blank" rel="noopener"></a>
+      <div class="acciones">
+        <button id="copiar" class="secundario" type="button">Copiar</button>
+        <button id="ver-clics" class="secundario" type="button">Ver clics</button>
+        <span id="clics"></span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const formulario = document.getElementById("formulario");
+    const error = document.getElementById("error");
+    const resultado = document.getElementById("resultado");
+    const enlace = document.getElementById("enlace");
+    const copiar = document.getElementById("copiar");
+    const clics = document.getElementById("clics");
+    let codigo = "";
+
+    function mostrarError(mensaje) {
+      error.textContent = mensaje;
+      error.hidden = false;
+    }
+
+    async function leerJSON(url, opciones) {
+      const respuesta = await fetch(url, opciones);
+      const datos = await respuesta.json();
+      if (!respuesta.ok) throw new Error(datos.error);
+      return datos;
+    }
+
+    formulario.addEventListener("submit", async (evento) => {
+      evento.preventDefault();
+      error.hidden = true;
+      resultado.hidden = true;
+
+      try {
+        const creado = await leerJSON("/api/links", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: document.getElementById("url").value }),
+        });
+        codigo = creado.code;
+        enlace.href = creado.short_url;
+        enlace.textContent = creado.short_url;
+        clics.textContent = "";
+        copiar.textContent = "Copiar";
+        resultado.hidden = false;
+      } catch (e) {
+        mostrarError(e.message || "No se pudo crear el enlace.");
+      }
+    });
+
+    copiar.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(enlace.href);
+        copiar.textContent = "Copiado";
+      } catch {
+        mostrarError("No se pudo copiar. Copia el enlace manualmente.");
+      }
+    });
+
+    document.getElementById("ver-clics").addEventListener("click", async () => {
+      try {
+        const datos = await leerJSON("/api/links/" + codigo);
+        clics.textContent = datos.clicks === 1 ? "1 clic" : datos.clicks + " clics";
+      } catch (e) {
+        mostrarError(e.message || "No se pudieron consultar los clics.");
+      }
+    });
+  </script>
+</body>
+</html>
