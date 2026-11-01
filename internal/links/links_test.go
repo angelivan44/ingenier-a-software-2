@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"sync"
 	"testing"
 )
 
@@ -24,6 +25,73 @@ func (f *fakeStore) Save(context.Context, Link) error {
 
 func (f *fakeStore) Find(context.Context, string) (Link, error) {
 	return Link{}, f.err
+}
+
+func (f *fakeStore) IncrementClicks(context.Context, string) (Link, error) {
+	return Link{}, f.err
+}
+
+func TestVisitSumaUnClic(t *testing.T) {
+	service := NewService(NewMemoryStore())
+	creado, err := service.Create(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	for clics := int64(1); clics <= 2; clics++ {
+		visitado, err := service.Visit(context.Background(), creado.Code)
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if visitado.Clicks != clics {
+			t.Errorf("clics = %d, se esperaban %d", visitado.Clicks, clics)
+		}
+	}
+}
+
+func TestVisitNoPierdeClicsSimultaneos(t *testing.T) {
+	const visitas = 100
+	service := NewService(NewMemoryStore())
+	creado, err := service.Create(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for range visitas {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := service.Visit(context.Background(), creado.Code); err != nil {
+				t.Errorf("error inesperado: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	final, err := service.Resolve(context.Background(), creado.Code)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if final.Clicks != visitas {
+		t.Errorf("clics = %d, se esperaban %d", final.Clicks, visitas)
+	}
+}
+
+func TestVisitFallaSiElCodigoNoExiste(t *testing.T) {
+	_, err := NewService(NewMemoryStore()).Visit(context.Background(), "noexiste")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, se esperaba ErrNotFound", err)
+	}
+}
+
+func TestVisitConservaErroresDelAlmacenamiento(t *testing.T) {
+	errBase := errors.New("base de datos caída")
+
+	_, err := NewService(&fakeStore{err: errBase}).Visit(context.Background(), "abc1234")
+	if !errors.Is(err, errBase) {
+		t.Fatalf("error = %v, se esperaba el error original", err)
+	}
 }
 
 func TestResolveDevuelveElEnlaceCreado(t *testing.T) {

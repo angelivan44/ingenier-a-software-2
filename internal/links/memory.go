@@ -40,3 +40,17 @@ func (m *MemoryStore) Find(_ context.Context, code string) (Link, error) {
 	}
 	return link, nil
 }
+
+// IncrementClicks suma un clic o devuelve ErrNotFound si el código no existe.
+func (m *MemoryStore) IncrementClicks(_ context.Context, code string) (Link, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	link, exists := m.links[code]
+	if !exists {
+		return Link{}, ErrNotFound
+	}
+	link.Clicks++
+	m.links[code] = link
+	return link, nil
+}
