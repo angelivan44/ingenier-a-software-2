@@ -1,0 +1,21 @@
+# Binarios y compilación
+/bin/
+/server
+*.exe
+*.test
+
+# Cobertura de pruebas
+*.out
+
+# Variables de entorno: nunca subir credenciales
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel
+
+# Sistema operativo y editores
+.DS_Store
+.idea/
+.vscode/
