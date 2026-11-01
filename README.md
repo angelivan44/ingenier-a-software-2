@@ -64,3 +64,7 @@ Por ahora los enlaces se guardan en memoria y se pierden al reiniciar el servido
 ```bash
 go test ./...
 ```
+
+## Integración continua
+
+Cada push a `main` o `develop` ejecuta el workflow `.github/workflows/ci.yml`, que revisa el formato, analiza el código con `go vet` y `golangci-lint`, corre las pruebas con el detector de condiciones de carrera y compila el servidor.

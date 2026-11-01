@@ -1,0 +1,54 @@
+name: CI
+
+# Se ejecuta con cada push a las ramas que se integran.
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+# El pipeline solo necesita leer el código.
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    name: Verificar código
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      # Usa la versión de Go declarada en go.mod.
+      - name: Instalar Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Instalar dependencias
+        run: go mod download
+
+      - name: Revisar formato
+        run: |
+          sin_formato="$(gofmt -l .)"
+          if [ -n "$sin_formato" ]; then
+            echo "Archivos sin formato:"
+            echo "$sin_formato"
+            exit 1
+          fi
+
+      - name: Analizar con go vet
+        run: go vet ./...
+
+      - name: Analizar con golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+
+      - name: Ejecutar pruebas
+        run: go test -race -cover ./...
+
+      - name: Compilar
+        run: go build -o bin/server ./cmd/api
