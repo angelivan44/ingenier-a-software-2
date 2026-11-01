@@ -31,6 +31,7 @@ var (
 type Link struct {
 	Code      string
 	URL       string
+	Clicks    int64
 	CreatedAt time.Time
 }
 
@@ -39,6 +40,9 @@ type Link struct {
 type Store interface {
 	Save(ctx context.Context, link Link) error
 	Find(ctx context.Context, code string) (Link, error)
+	// IncrementClicks suma un clic y devuelve el enlace actualizado.
+	// Es una sola operación para no perder clics simultáneos.
+	IncrementClicks(ctx context.Context, code string) (Link, error)
 }
 
 // Service aplica las reglas para crear enlaces.
@@ -77,11 +81,20 @@ func (s *Service) Create(ctx context.Context, rawURL string) (Link, error) {
 	return Link{}, fmt.Errorf("sin código libre tras %d intentos: %w", maxAttempts, ErrCodeExists)
 }
 
-// Resolve busca el enlace asociado a un código.
+// Resolve busca el enlace asociado a un código sin contar un clic.
 func (s *Service) Resolve(ctx context.Context, code string) (Link, error) {
 	link, err := s.store.Find(ctx, code)
 	if err != nil {
 		return Link{}, fmt.Errorf("buscar enlace: %w", err)
+	}
+	return link, nil
+}
+
+// Visit registra un clic y devuelve el enlace visitado.
+func (s *Service) Visit(ctx context.Context, code string) (Link, error) {
+	link, err := s.store.IncrementClicks(ctx, code)
+	if err != nil {
+		return Link{}, fmt.Errorf("registrar clic: %w", err)
 	}
 	return link, nil
 }

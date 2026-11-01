@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/angelhuayas/acortador-enlaces/internal/links"
 )
@@ -25,6 +26,7 @@ func New(service *links.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/links", s.createLink)
+	mux.HandleFunc("GET /api/links/{code}", s.linkStats)
 	mux.HandleFunc("GET /{code}", s.redirect)
 	return mux
 }
@@ -39,9 +41,21 @@ type createLinkRequest struct {
 }
 
 type linkResponse struct {
-	Code     string `json:"code"`
-	URL      string `json:"url"`
-	ShortURL string `json:"short_url"`
+	Code      string    `json:"code"`
+	URL       string    `json:"url"`
+	ShortURL  string    `json:"short_url"`
+	Clicks    int64     `json:"clicks"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func newLinkResponse(r *http.Request, link links.Link) linkResponse {
+	return linkResponse{
+		Code:      link.Code,
+		URL:       link.URL,
+		ShortURL:  baseURL(r) + "/" + link.Code,
+		Clicks:    link.Clicks,
+		CreatedAt: link.CreatedAt,
+	}
 }
 
 // createLink recibe una URL y responde con su enlace corto.
@@ -64,29 +78,46 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, linkResponse{
-		Code:     link.Code,
-		URL:      link.URL,
-		ShortURL: baseURL(r) + "/" + link.Code,
-	})
+	writeJSON(w, http.StatusCreated, newLinkResponse(r, link))
 }
 
-// redirect envía al visitante a la URL original del enlace.
-func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
+// linkStats muestra los datos de un enlace sin contarlo como clic.
+func (s *Server) linkStats(w http.ResponseWriter, r *http.Request) {
 	link, err := s.links.Resolve(r.Context(), r.PathValue("code"))
-	if errors.Is(err, links.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "enlace no encontrado")
+	if err != nil {
+		writeLookupError(w, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, newLinkResponse(r, link))
+}
+
+// redirect envía al visitante a la URL original y cuenta el clic.
+func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
+	// Una petición HEAD solo comprueba el enlace: nadie lo visitó de verdad.
+	lookup := s.links.Visit
+	if r.Method == http.MethodHead {
+		lookup = s.links.Resolve
+	}
+
+	link, err := lookup(r.Context(), r.PathValue("code"))
 	if err != nil {
-		log.Printf("no se pudo resolver el enlace: %v", err)
-		writeError(w, http.StatusInternalServerError, "no se pudo resolver el enlace")
+		writeLookupError(w, err)
 		return
 	}
 
 	// 302 y no 301: el navegador no guarda la redirección en caché,
-	// así cada visita pasa por el servidor y se podrá contar como clic.
+	// así cada visita pasa por el servidor y se cuenta como clic.
 	http.Redirect(w, r, link.URL, http.StatusFound)
+}
+
+// writeLookupError responde a un error al buscar un enlace.
+func writeLookupError(w http.ResponseWriter, err error) {
+	if errors.Is(err, links.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "enlace no encontrado")
+		return
+	}
+	log.Printf("no se pudo obtener el enlace: %v", err)
+	writeError(w, http.StatusInternalServerError, "no se pudo obtener el enlace")
 }
 
 // baseURL arma la dirección pública a partir de la petición recibida.
