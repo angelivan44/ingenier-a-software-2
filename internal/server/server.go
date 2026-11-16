@@ -97,9 +97,10 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		URL:           req.URL,
 		Alias:         req.Alias,
 		ExpiresInDays: req.ExpiresInDays,
+		ServiceHost:   r.Host,
 	})
 	if errors.Is(err, links.ErrInvalidURL) || errors.Is(err, links.ErrInvalidAlias) ||
-		errors.Is(err, links.ErrInvalidExpiration) {
+		errors.Is(err, links.ErrInvalidExpiration) || errors.Is(err, links.ErrSelfLink) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

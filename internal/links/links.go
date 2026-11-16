@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -33,6 +34,8 @@ var (
 	ErrCodeExists = errors.New("el código ya existe")
 	// ErrNotFound indica que no hay un enlace con ese código.
 	ErrNotFound = errors.New("enlace no encontrado")
+	// ErrSelfLink indica que la URL apunta al propio acortador.
+	ErrSelfLink = errors.New("la URL no puede apuntar al propio acortador")
 	// ErrInvalidAlias indica que el alias pedido no cumple el formato.
 	ErrInvalidAlias = errors.New("el alias debe tener de 3 a 30 letras, números, guiones o guiones bajos y no ser una ruta reservada")
 	// ErrAliasTaken indica que otro enlace ya usa el alias pedido.
@@ -59,6 +62,9 @@ type NewLink struct {
 	Alias string
 	// ExpiresInDays es opcional: 0 significa que el enlace no vence.
 	ExpiresInDays int
+	// ServiceHost es el dominio del acortador. Una URL hacia ese dominio
+	// redirigiría a otro enlace corto, o a sí misma, y se rechaza.
+	ServiceHost string
 }
 
 // Link es un enlace corto y la URL a la que apunta.
@@ -119,6 +125,9 @@ func (s *Service) Create(ctx context.Context, input NewLink) (Link, error) {
 	target, err := validateURL(input.URL)
 	if err != nil {
 		return Link{}, err
+	}
+	if pointsTo(target, input.ServiceHost) {
+		return Link{}, ErrSelfLink
 	}
 	if input.ExpiresInDays < 0 || input.ExpiresInDays > maxExpirationDays {
 		return Link{}, ErrInvalidExpiration
@@ -274,6 +283,24 @@ func validateURL(rawURL string) (string, error) {
 		return "", ErrInvalidURL
 	}
 	return trimmed, nil
+}
+
+// pointsTo indica si la URL ya validada apunta al dominio indicado. Compara
+// solo el nombre, sin puerto ni mayúsculas: example.com:80 y EXAMPLE.com son
+// el mismo sitio.
+func pointsTo(target, host string) bool {
+	if host == "" {
+		return false
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	serviceName := host
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		serviceName = name
+	}
+	return strings.EqualFold(parsed.Hostname(), serviceName)
 }
 
 // validateAlias acepta solo alias con el formato permitido y que no

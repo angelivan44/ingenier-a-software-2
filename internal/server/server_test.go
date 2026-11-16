@@ -32,12 +32,17 @@ func (failingStore) Delete(context.Context, string) error {
 	return errors.New("base de datos caída")
 }
 
+// testHost es el dominio del acortador en las pruebas. No es example.com,
+// el host por defecto de httptest, porque las URLs de destino usan ese dominio.
+const testHost = "corto.test"
+
 func newTestHandler() http.Handler {
 	return New(links.NewService(links.NewMemoryStore()))
 }
 
 func postLink(handler http.Handler, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/api/links", strings.NewReader(body))
+	req.Host = testHost
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
@@ -45,6 +50,7 @@ func postLink(handler http.Handler, body string) *httptest.ResponseRecorder {
 
 func TestHomeMuestraElFormulario(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = testHost
 	rec := httptest.NewRecorder()
 
 	newTestHandler().ServeHTTP(rec, req)
@@ -62,6 +68,7 @@ func TestHomeMuestraElFormulario(t *testing.T) {
 
 func TestHealth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Host = testHost
 	rec := httptest.NewRecorder()
 
 	newTestHandler().ServeHTTP(rec, req)
@@ -88,7 +95,7 @@ func TestCreateLinkRespondeConEnlaceCorto(t *testing.T) {
 	if got.URL != "https://example.com/articulo" {
 		t.Errorf("URL = %q", got.URL)
 	}
-	if got.ShortURL != "http://example.com/"+got.Code {
+	if got.ShortURL != "http://corto.test/"+got.Code {
 		t.Errorf("ShortURL = %q, código = %q", got.ShortURL, got.Code)
 	}
 }
@@ -114,6 +121,7 @@ func TestCreateLinkRechazaPeticionesInvalidas(t *testing.T) {
 
 func get(handler http.Handler, path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Host = testHost
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
@@ -195,6 +203,7 @@ func TestRedirectHeadNoCuentaComoClic(t *testing.T) {
 	link := createLink(t, handler)
 
 	req := httptest.NewRequest(http.MethodHead, "/"+link.Code, nil)
+	req.Host = testHost
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -274,7 +283,7 @@ func TestCreateLinkConAlias(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("respuesta no es JSON: %v", err)
 	}
-	if got.ShortURL != "http://example.com/articulo" {
+	if got.ShortURL != "http://corto.test/articulo" {
 		t.Errorf("ShortURL = %q", got.ShortURL)
 	}
 
@@ -309,6 +318,7 @@ func TestCreateLinkRespondeConflictoSiElAliasExiste(t *testing.T) {
 
 func deleteLink(handler http.Handler, code, authorization string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/"+code, nil)
+	req.Host = testHost
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
@@ -422,6 +432,7 @@ func TestRedirectRespondeGoneSiElEnlaceVencio(t *testing.T) {
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		req := httptest.NewRequest(method, "/oferta", nil)
+		req.Host = testHost
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusGone {
@@ -441,12 +452,11 @@ func TestCreateLinkRechazaURLDelPropioAcortador(t *testing.T) {
 	handler := newTestHandler()
 	link := createLink(t, handler)
 
-	// httptest usa example.com como host del acortador.
 	for _, url := range []string{
 		link.ShortURL,
-		"https://example.com/" + link.Code,
-		"http://EXAMPLE.com/otro",
-		"http://example.com:80/otro",
+		"https://corto.test/" + link.Code,
+		"http://CORTO.test/otro",
+		"http://corto.test:80/otro",
 	} {
 		rec := postLink(handler, `{"url":"`+url+`"}`)
 		if rec.Code != http.StatusBadRequest {
@@ -455,7 +465,7 @@ func TestCreateLinkRechazaURLDelPropioAcortador(t *testing.T) {
 	}
 
 	// Un subdominio u otro sitio sí se permiten.
-	if rec := postLink(handler, `{"url":"https://blog.example.com/"}`); rec.Code != http.StatusCreated {
+	if rec := postLink(handler, `{"url":"https://blog.corto.test/"}`); rec.Code != http.StatusCreated {
 		t.Errorf("subdominio: código = %d, se esperaba %d", rec.Code, http.StatusCreated)
 	}
 }

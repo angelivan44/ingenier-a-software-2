@@ -533,3 +533,32 @@ func TestCreateConAliasYExpiracion(t *testing.T) {
 		t.Errorf("enlace inesperado: %+v", link)
 	}
 }
+
+// Caja blanca: cubre las ramas de pointsTo (sin host, con puerto, mayúsculas
+// y subdominio).
+func TestCreateRechazaURLDelPropioAcortador(t *testing.T) {
+	casos := []struct {
+		nombre    string
+		url, host string
+		rechazada bool
+	}{
+		{"sin host conocido", "https://corto.pe/abc", "", false},
+		{"mismo dominio", "https://corto.pe/abc", "corto.pe", true},
+		{"host con puerto", "http://localhost:3000/abc", "localhost:3000", true},
+		{"URL con otro puerto", "http://localhost:8080/abc", "localhost:3000", true},
+		{"mayúsculas", "https://CORTO.pe/abc", "corto.pe", true},
+		{"subdominio", "https://blog.corto.pe/abc", "corto.pe", false},
+		{"otro dominio", "https://example.com", "corto.pe", false},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			_, err := NewService(NewMemoryStore()).Create(context.Background(), NewLink{URL: c.url, ServiceHost: c.host})
+			if c.rechazada && !errors.Is(err, ErrSelfLink) {
+				t.Fatalf("error = %v, se esperaba ErrSelfLink", err)
+			}
+			if !c.rechazada && err != nil {
+				t.Fatalf("error inesperado: %v", err)
+			}
+		})
+	}
+}
