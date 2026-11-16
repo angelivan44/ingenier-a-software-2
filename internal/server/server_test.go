@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/angelivan44/ingenier-a-software-2/internal/links"
 )
@@ -374,5 +375,62 @@ func TestDeleteLinkNoExponeErroresInternos(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "base de datos") {
 		t.Fatalf("la respuesta expone el error interno: %s", rec.Body)
+	}
+}
+
+func TestCreateLinkConExpiracion(t *testing.T) {
+	rec := postLink(newTestHandler(), `{"url":"https://example.com","expires_in_days":7}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d, se esperaba %d: %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+
+	var got linkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("respuesta no es JSON: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(got.CreatedAt.AddDate(0, 0, 7)) {
+		t.Errorf("expires_at = %v, created_at = %v", got.ExpiresAt, got.CreatedAt)
+	}
+}
+
+func TestCreateLinkSinExpiracionOmiteElCampo(t *testing.T) {
+	rec := postLink(newTestHandler(), `{"url":"https://example.com"}`)
+
+	if strings.Contains(rec.Body.String(), "expires_at") {
+		t.Errorf("la respuesta incluye expires_at: %s", rec.Body)
+	}
+}
+
+func TestCreateLinkRechazaExpiracionFueraDeRango(t *testing.T) {
+	for _, body := range []string{
+		`{"url":"https://example.com","expires_in_days":-1}`,
+		`{"url":"https://example.com","expires_in_days":366}`,
+		`{"url":"https://example.com","expires_in_days":"7"}`,
+	} {
+		if rec := postLink(newTestHandler(), body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: código = %d, se esperaba %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestRedirectRespondeGoneSiElEnlaceVencio(t *testing.T) {
+	ahora := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	handler := New(links.NewServiceWithClock(links.NewMemoryStore(), func() time.Time { return ahora }))
+	postLink(handler, `{"url":"https://example.com","alias":"oferta","expires_in_days":1}`)
+
+	ahora = ahora.AddDate(0, 0, 1)
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req := httptest.NewRequest(method, "/oferta", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusGone {
+			t.Errorf("%s: código = %d, se esperaba %d", method, rec.Code, http.StatusGone)
+		}
+	}
+
+	// La consulta sigue disponible para ver los clics.
+	if stats := statsOf(t, handler, "oferta"); stats.ExpiresAt == nil {
+		t.Error("la consulta no muestra expires_at")
 	}
 }

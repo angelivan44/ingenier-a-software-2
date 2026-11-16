@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,6 +26,13 @@ CREATE TABLE IF NOT EXISTS links (
 // enlaces. Esos enlaces quedan con hash vacío y no se pueden eliminar.
 const addDeleteToken = `
 ALTER TABLE links ADD COLUMN IF NOT EXISTS delete_token_hash TEXT NOT NULL DEFAULT ''`
+
+// addExpiresAt agrega la expiración. NULL significa que el enlace no vence.
+const addExpiresAt = `
+ALTER TABLE links ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`
+
+// linkColumns son las columnas que se leen de cada enlace, en el orden de scanLink.
+const linkColumns = `code, url, clicks, created_at, delete_token_hash, expires_at`
 
 // PostgresStore guarda los enlaces en Postgres, así sobreviven a los
 // reinicios y se comparten entre instancias.
@@ -50,7 +58,7 @@ func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, 
 	}
 	// Van en Exec separados: sin sentencias preparadas no se pueden enviar
 	// dos sentencias en una misma llamada.
-	for _, statement := range []string{createTable, addDeleteToken} {
+	for _, statement := range []string{createTable, addDeleteToken, addExpiresAt} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			pool.Close()
 			return nil, fmt.Errorf("crear tabla: %w", err)
@@ -67,10 +75,10 @@ func (p *PostgresStore) Close() {
 // Save guarda el enlace o devuelve ErrCodeExists si el código ya existe.
 func (p *PostgresStore) Save(ctx context.Context, link Link) error {
 	result, err := p.pool.Exec(ctx,
-		`INSERT INTO links (code, url, clicks, created_at, delete_token_hash)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO links (code, url, clicks, created_at, delete_token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (code) DO NOTHING`,
-		link.Code, link.URL, link.Clicks, link.CreatedAt, link.DeleteTokenHash)
+		link.Code, link.URL, link.Clicks, link.CreatedAt, link.DeleteTokenHash, nullableTime(link.ExpiresAt))
 	if err != nil {
 		return err
 	}
@@ -83,7 +91,7 @@ func (p *PostgresStore) Save(ctx context.Context, link Link) error {
 // Find devuelve el enlace o ErrNotFound si el código no existe.
 func (p *PostgresStore) Find(ctx context.Context, code string) (Link, error) {
 	row := p.pool.QueryRow(ctx,
-		`SELECT code, url, clicks, created_at, delete_token_hash FROM links WHERE code = $1`, code)
+		`SELECT `+linkColumns+` FROM links WHERE code = $1`, code)
 	return scanLink(row)
 }
 
@@ -92,7 +100,7 @@ func (p *PostgresStore) Find(ctx context.Context, code string) (Link, error) {
 func (p *PostgresStore) IncrementClicks(ctx context.Context, code string) (Link, error) {
 	row := p.pool.QueryRow(ctx,
 		`UPDATE links SET clicks = clicks + 1 WHERE code = $1
-		 RETURNING code, url, clicks, created_at, delete_token_hash`, code)
+		 RETURNING `+linkColumns, code)
 	return scanLink(row)
 }
 
@@ -110,7 +118,8 @@ func (p *PostgresStore) Delete(ctx context.Context, code string) error {
 
 func scanLink(row pgx.Row) (Link, error) {
 	var link Link
-	err := row.Scan(&link.Code, &link.URL, &link.Clicks, &link.CreatedAt, &link.DeleteTokenHash)
+	var expiresAt *time.Time
+	err := row.Scan(&link.Code, &link.URL, &link.Clicks, &link.CreatedAt, &link.DeleteTokenHash, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Link{}, ErrNotFound
 	}
@@ -118,5 +127,16 @@ func scanLink(row pgx.Row) (Link, error) {
 		return Link{}, err
 	}
 	link.CreatedAt = link.CreatedAt.UTC()
+	if expiresAt != nil {
+		link.ExpiresAt = expiresAt.UTC()
+	}
 	return link, nil
+}
+
+// nullableTime convierte la hora cero en NULL para la base de datos.
+func nullableTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }

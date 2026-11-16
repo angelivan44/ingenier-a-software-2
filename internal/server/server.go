@@ -52,8 +52,9 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createLinkRequest struct {
-	URL   string `json:"url"`
-	Alias string `json:"alias"`
+	URL           string `json:"url"`
+	Alias         string `json:"alias"`
+	ExpiresInDays int    `json:"expires_in_days"`
 }
 
 type linkResponse struct {
@@ -62,18 +63,24 @@ type linkResponse struct {
 	ShortURL  string    `json:"short_url"`
 	Clicks    int64     `json:"clicks"`
 	CreatedAt time.Time `json:"created_at"`
+	// ExpiresAt se omite si el enlace no vence.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// DeleteToken solo se envía al crear el enlace.
 	DeleteToken string `json:"delete_token,omitempty"`
 }
 
 func newLinkResponse(r *http.Request, link links.Link) linkResponse {
-	return linkResponse{
+	response := linkResponse{
 		Code:      link.Code,
 		URL:       link.URL,
 		ShortURL:  baseURL(r) + "/" + link.Code,
 		Clicks:    link.Clicks,
 		CreatedAt: link.CreatedAt,
 	}
+	if !link.ExpiresAt.IsZero() {
+		response.ExpiresAt = &link.ExpiresAt
+	}
+	return response
 }
 
 // createLink recibe una URL, y opcionalmente un alias, y responde con su
@@ -86,8 +93,13 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := s.links.Create(r.Context(), links.NewLink{URL: req.URL, Alias: req.Alias})
-	if errors.Is(err, links.ErrInvalidURL) || errors.Is(err, links.ErrInvalidAlias) {
+	link, err := s.links.Create(r.Context(), links.NewLink{
+		URL:           req.URL,
+		Alias:         req.Alias,
+		ExpiresInDays: req.ExpiresInDays,
+	})
+	if errors.Is(err, links.ErrInvalidURL) || errors.Is(err, links.ErrInvalidAlias) ||
+		errors.Is(err, links.ErrInvalidExpiration) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -127,7 +139,8 @@ func (s *Server) deleteLink(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// linkStats muestra los datos de un enlace sin contarlo como clic.
+// linkStats muestra los datos de un enlace sin contarlo como clic. También
+// responde para enlaces vencidos, así el dueño puede ver sus clics.
 func (s *Server) linkStats(w http.ResponseWriter, r *http.Request) {
 	link, err := s.links.Resolve(r.Context(), r.PathValue("code"))
 	if err != nil {
@@ -142,7 +155,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	// Una petición HEAD solo comprueba el enlace: nadie lo visitó de verdad.
 	lookup := s.links.Visit
 	if r.Method == http.MethodHead {
-		lookup = s.links.Resolve
+		lookup = s.links.Check
 	}
 
 	link, err := lookup(r.Context(), r.PathValue("code"))
@@ -160,6 +173,10 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 func writeLookupError(w http.ResponseWriter, err error) {
 	if errors.Is(err, links.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "enlace no encontrado")
+		return
+	}
+	if errors.Is(err, links.ErrExpired) {
+		writeError(w, http.StatusGone, err.Error())
 		return
 	}
 	log.Printf("no se pudo obtener el enlace: %v", err)

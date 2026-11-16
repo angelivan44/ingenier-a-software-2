@@ -20,7 +20,10 @@ const (
 	codeLength  = 7
 	tokenLength = 32
 	maxAttempts = 5
-	alphabet    = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	// maxExpirationDays es el plazo máximo que se puede pedir para que un
+	// enlace venza.
+	maxExpirationDays = 365
+	alphabet          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
 var (
@@ -36,6 +39,10 @@ var (
 	ErrAliasTaken = errors.New("el alias ya está en uso")
 	// ErrForbidden indica que el token no permite eliminar el enlace.
 	ErrForbidden = errors.New("el token no permite eliminar este enlace")
+	// ErrInvalidExpiration indica que el plazo de expiración está fuera de rango.
+	ErrInvalidExpiration = errors.New("expires_in_days debe estar entre 1 y 365")
+	// ErrExpired indica que el enlace ya venció.
+	ErrExpired = errors.New("el enlace expiró")
 )
 
 // aliasPattern define los caracteres y el largo permitidos para un alias.
@@ -50,6 +57,8 @@ var reservedAliases = map[string]bool{"api": true, "health": true}
 type NewLink struct {
 	URL   string
 	Alias string
+	// ExpiresInDays es opcional: 0 significa que el enlace no vence.
+	ExpiresInDays int
 }
 
 // Link es un enlace corto y la URL a la que apunta.
@@ -58,6 +67,9 @@ type Link struct {
 	URL       string
 	Clicks    int64
 	CreatedAt time.Time
+	// ExpiresAt es el momento en que el enlace deja de redirigir. Si es
+	// cero, el enlace no vence.
+	ExpiresAt time.Time
 	// DeleteTokenHash es el hash del token para eliminar el enlace. Se guarda
 	// el hash y no el token, así una filtración de la base no permite borrar.
 	DeleteTokenHash string
@@ -78,14 +90,27 @@ type Store interface {
 	Delete(ctx context.Context, code string) error
 }
 
+// Expired indica si el enlace ya venció en el momento indicado. Vence
+// justo en ExpiresAt, no un instante después.
+func (l Link) Expired(now time.Time) bool {
+	return !l.ExpiresAt.IsZero() && !now.Before(l.ExpiresAt)
+}
+
 // Service aplica las reglas para crear enlaces.
 type Service struct {
 	store Store
+	now   func() time.Time
 }
 
 // NewService crea un Service que usa el almacenamiento indicado.
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	return NewServiceWithClock(store, time.Now)
+}
+
+// NewServiceWithClock permite fijar la hora actual, así las pruebas pueden
+// comprobar la expiración sin esperar días.
+func NewServiceWithClock(store Store, now func() time.Time) *Service {
+	return &Service{store: store, now: now}
 }
 
 // Create valida los datos y guarda un enlace con el alias pedido o con un
@@ -95,9 +120,12 @@ func (s *Service) Create(ctx context.Context, input NewLink) (Link, error) {
 	if err != nil {
 		return Link{}, err
 	}
+	if input.ExpiresInDays < 0 || input.ExpiresInDays > maxExpirationDays {
+		return Link{}, ErrInvalidExpiration
+	}
 
 	if input.Alias != "" {
-		return s.createWithAlias(ctx, target, input.Alias)
+		return s.createWithAlias(ctx, target, input)
 	}
 
 	// Una colisión es muy improbable, pero se reintenta con otro código.
@@ -107,7 +135,7 @@ func (s *Service) Create(ctx context.Context, input NewLink) (Link, error) {
 			return Link{}, fmt.Errorf("generar código: %w", err)
 		}
 
-		link, err := newLink(code, target)
+		link, err := s.newLink(code, target, input.ExpiresInDays)
 		if err != nil {
 			return Link{}, err
 		}
@@ -124,12 +152,12 @@ func (s *Service) Create(ctx context.Context, input NewLink) (Link, error) {
 
 // createWithAlias guarda el enlace con el código que eligió el usuario.
 // No se reintenta: si el alias está ocupado, el usuario debe elegir otro.
-func (s *Service) createWithAlias(ctx context.Context, target, alias string) (Link, error) {
-	if err := validateAlias(alias); err != nil {
+func (s *Service) createWithAlias(ctx context.Context, target string, input NewLink) (Link, error) {
+	if err := validateAlias(input.Alias); err != nil {
 		return Link{}, err
 	}
 
-	link, err := newLink(alias, target)
+	link, err := s.newLink(input.Alias, target, input.ExpiresInDays)
 	if err != nil {
 		return Link{}, err
 	}
@@ -143,19 +171,28 @@ func (s *Service) createWithAlias(ctx context.Context, target, alias string) (Li
 	return link, nil
 }
 
-// newLink arma un enlace nuevo con su token para eliminarlo.
-func newLink(code, target string) (Link, error) {
+// newLink arma un enlace nuevo con su token para eliminarlo y, si se pidió,
+// su fecha de expiración.
+func (s *Service) newLink(code, target string, expiresInDays int) (Link, error) {
 	token, err := randomString(tokenLength)
 	if err != nil {
 		return Link{}, fmt.Errorf("generar token: %w", err)
 	}
-	return Link{
+
+	// Postgres guarda microsegundos: se trunca para que el enlace devuelto
+	// coincida con el guardado.
+	now := s.now().UTC().Truncate(time.Microsecond)
+	link := Link{
 		Code:            code,
 		URL:             target,
-		CreatedAt:       time.Now().UTC(),
+		CreatedAt:       now,
 		DeleteTokenHash: hashToken(token),
 		DeleteToken:     token,
-	}, nil
+	}
+	if expiresInDays > 0 {
+		link.ExpiresAt = now.AddDate(0, 0, expiresInDays)
+	}
+	return link, nil
 }
 
 // Delete elimina el enlace si el token coincide con el que se entregó al
@@ -195,8 +232,26 @@ func (s *Service) Resolve(ctx context.Context, code string) (Link, error) {
 	return link, nil
 }
 
-// Visit registra un clic y devuelve el enlace visitado.
+// Check busca el enlace para redirigir sin contar un clic. Devuelve
+// ErrExpired si ya venció.
+func (s *Service) Check(ctx context.Context, code string) (Link, error) {
+	link, err := s.Resolve(ctx, code)
+	if err != nil {
+		return Link{}, err
+	}
+	if link.Expired(s.now()) {
+		return Link{}, ErrExpired
+	}
+	return link, nil
+}
+
+// Visit registra un clic y devuelve el enlace visitado. Un enlace vencido
+// devuelve ErrExpired y no suma el clic.
 func (s *Service) Visit(ctx context.Context, code string) (Link, error) {
+	if _, err := s.Check(ctx, code); err != nil {
+		return Link{}, err
+	}
+
 	link, err := s.store.IncrementClicks(ctx, code)
 	if err != nil {
 		return Link{}, fmt.Errorf("registrar clic: %w", err)

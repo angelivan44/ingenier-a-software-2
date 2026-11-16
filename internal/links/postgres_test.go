@@ -128,3 +128,41 @@ func TestPostgresNoPierdeClicsSimultaneos(t *testing.T) {
 		t.Errorf("clics = %d, se esperaban %d", final.Clicks, visitas)
 	}
 }
+
+func TestPostgresGuardaLaExpiracion(t *testing.T) {
+	store := newTestPostgres(t)
+	link := saveTestLink(t, store)
+
+	if !link.ExpiresAt.IsZero() {
+		t.Fatal("el enlace de prueba no debería vencer")
+	}
+	found, err := store.Find(context.Background(), link.Code)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if !found.ExpiresAt.IsZero() {
+		t.Errorf("ExpiresAt = %v, se esperaba vacío (NULL)", found.ExpiresAt)
+	}
+
+	code, err := generateCode()
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	vence := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	if err := store.Save(context.Background(), Link{Code: code, URL: "https://example.com", CreatedAt: vence, ExpiresAt: vence}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Delete(context.Background(), code); err != nil {
+			t.Errorf("no se pudo limpiar: %v", err)
+		}
+	})
+
+	found, err = store.Find(context.Background(), code)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if !found.ExpiresAt.Equal(vence) {
+		t.Errorf("ExpiresAt = %v, se esperaba %v", found.ExpiresAt, vence)
+	}
+}
