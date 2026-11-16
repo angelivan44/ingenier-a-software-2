@@ -469,3 +469,21 @@ func TestCreateLinkRechazaURLDelPropioAcortador(t *testing.T) {
 		t.Errorf("subdominio: código = %d, se esperaba %d", rec.Code, http.StatusCreated)
 	}
 }
+
+// Defecto: el decodificador lee solo el primer valor JSON y descarta el resto
+// del cuerpo, así una petición mal formada se acepta en silencio.
+func TestCreateLinkRechazaDatosDespuesDelJSON(t *testing.T) {
+	for _, body := range []string{
+		`{"url":"https://example.com"} basura`,
+		`{"url":"https://example.com"}{"url":"https://otro.com"}`,
+	} {
+		if rec := postLink(newTestHandler(), body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: código = %d, se esperaba %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+
+	// Un salto de línea al final es habitual y se acepta.
+	if rec := postLink(newTestHandler(), "{\"url\":\"https://example.com\"}\n"); rec.Code != http.StatusCreated {
+		t.Errorf("con salto de línea: código = %d, se esperaba %d", rec.Code, http.StatusCreated)
+	}
+}
