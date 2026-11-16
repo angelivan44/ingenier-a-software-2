@@ -1,11 +1,21 @@
 name: CI
 
-# Se ejecuta con cada push a las ramas que se integran.
+# Se ejecuta con cada push a las ramas que se integran y con cada pull request
+# hacia ellas. Con la protección de ramas, un PR con pruebas fallidas no se
+# puede fusionar.
 on:
   push:
     branches:
       - main
       - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# Cobertura mínima aceptada, en porcentaje. Si baja, el pipeline falla.
+env:
+  COBERTURA_MINIMA: 70
 
 # El pipeline solo necesita leer el código.
 permissions:
@@ -63,9 +73,44 @@ jobs:
           version: v2.15.0
 
       - name: Ejecutar pruebas
-        run: go test -race -cover ./internal/...
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./internal/...
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/acortador_test?sslmode=disable
+
+      # Muestra la cobertura por función en el resumen del job.
+      - name: Reporte de cobertura
+        run: |
+          go tool cover -func=coverage.out > coverage.txt
+          go tool cover -html=coverage.out -o coverage.html
+          total="$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')"
+          {
+            echo "## Cobertura de pruebas: ${total}%"
+            echo
+            echo "Mínimo aceptado: ${COBERTURA_MINIMA}%"
+            echo
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "TOTAL_COBERTURA=${total}" >> "$GITHUB_ENV"
+
+      # Guarda el reporte para descargarlo desde la ejecución del workflow.
+      - name: Subir reporte de cobertura
+        uses: actions/upload-artifact@v7
+        with:
+          name: reporte-cobertura
+          path: |
+            coverage.out
+            coverage.txt
+            coverage.html
+
+      - name: Verificar cobertura mínima
+        run: |
+          if awk "BEGIN {exit !(${TOTAL_COBERTURA} < ${COBERTURA_MINIMA})}"; then
+            echo "La cobertura (${TOTAL_COBERTURA}%) es menor al mínimo (${COBERTURA_MINIMA}%)."
+            exit 1
+          fi
+          echo "Cobertura ${TOTAL_COBERTURA}%: cumple el mínimo de ${COBERTURA_MINIMA}%."
 
       - name: Compilar
         run: go build -o bin/server ./cmd/api
