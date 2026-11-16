@@ -64,6 +64,7 @@
       cursor: pointer;
     }
     button.secundario { background: transparent; color: var(--acento); }
+    .opcional { font-weight: 400; color: var(--suave); }
     #error { margin-top: 12px; color: var(--error); }
     #resultado {
       margin-top: 24px;
@@ -86,6 +87,9 @@
     <form id="formulario">
       <label for="url">Dirección web</label>
       <input id="url" type="url" placeholder="https://ejemplo.com/articulo" required>
+      <label for="alias">Alias <span class="opcional">(opcional)</span></label>
+      <input id="alias" type="text" placeholder="mi-promo" pattern="[A-Za-z0-9_\-]{3,30}"
+             title="De 3 a 30 letras, números, guiones o guiones bajos">
       <button type="submit">Acortar</button>
     </form>
     <div id="error" role="alert" hidden></div>
@@ -130,7 +134,10 @@
         const creado = await leerJSON("/api/links", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: document.getElementById("url").value }),
+          body: JSON.stringify({
+            url: document.getElementById("url").value,
+            alias: document.getElementById("alias").value.trim(),
+          }),
         });
         codigo = creado.code;
         enlace.href = creado.short_url;

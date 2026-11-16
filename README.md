@@ -50,6 +50,16 @@ Respuesta (`201 Created`):
 
 Si la URL no es `http` o `https`, o no incluye dominio, responde `400 Bad Request`.
 
+Para elegir el código, envía un `alias` opcional:
+
+```bash
+curl -X POST http://localhost:3000/api/links \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/articulo","alias":"mi-promo"}'
+```
+
+El alias debe tener de 3 a 30 letras, números, guiones o guiones bajos, y no puede ser `api` ni `health`. Si no cumple, responde `400 Bad Request`; si otro enlace ya lo usa, `409 Conflict`.
+
 Abrir un enlace corto redirige a la URL original (`302 Found`). Si el código no existe, responde `404 Not Found`:
 
 ```bash
