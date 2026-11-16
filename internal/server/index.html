@@ -43,7 +43,7 @@
     label { display: block; margin-bottom: 8px; font-weight: 600; }
     form { display: flex; flex-wrap: wrap; gap: 8px; }
     label { flex-basis: 100%; }
-    input {
+    input, select {
       flex: 1 1 220px;
       min-width: 0;
       padding: 10px 12px;
@@ -64,6 +64,7 @@
       cursor: pointer;
     }
     button.secundario { background: transparent; color: var(--acento); }
+    .opcional { font-weight: 400; color: var(--suave); }
     #error { margin-top: 12px; color: var(--error); }
     #resultado {
       margin-top: 24px;
@@ -75,7 +76,7 @@
     }
     #resultado a { color: var(--acento); font-weight: 600; }
     .acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
-    #clics { color: var(--suave); }
+    #clics, .nota { color: var(--suave); }
   </style>
 </head>
 <body>
@@ -86,15 +87,27 @@
     <form id="formulario">
       <label for="url">Dirección web</label>
       <input id="url" type="url" placeholder="https://ejemplo.com/articulo" required>
+      <label for="alias">Alias <span class="opcional">(opcional)</span></label>
+      <input id="alias" type="text" placeholder="mi-promo" pattern="[A-Za-z0-9_\-]{3,30}"
+             title="De 3 a 30 letras, números, guiones o guiones bajos">
+      <label for="expira">Expira</label>
+      <select id="expira">
+        <option value="0">Nunca</option>
+        <option value="1">En 1 día</option>
+        <option value="7">En 7 días</option>
+        <option value="30">En 30 días</option>
+      </select>
       <button type="submit">Acortar</button>
     </form>
     <div id="error" role="alert" hidden></div>
 
     <section id="resultado" aria-live="polite" hidden>
       <a id="enlace" target="_blank" rel="noopener"></a>
+      <div id="vence" class="nota"></div>
       <div class="acciones">
         <button id="copiar" class="secundario" type="button">Copiar</button>
         <button id="ver-clics" class="secundario" type="button">Ver clics</button>
+        <button id="eliminar" class="secundario" type="button">Eliminar</button>
         <span id="clics"></span>
       </div>
     </section>
@@ -108,6 +121,7 @@
     const copiar = document.getElementById("copiar");
     const clics = document.getElementById("clics");
     let codigo = "";
+    let token = "";
 
     function mostrarError(mensaje) {
       error.textContent = mensaje;
@@ -130,11 +144,19 @@
         const creado = await leerJSON("/api/links", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: document.getElementById("url").value }),
+          body: JSON.stringify({
+            url: document.getElementById("url").value,
+            alias: document.getElementById("alias").value.trim(),
+            expires_in_days: Number(document.getElementById("expira").value),
+          }),
         });
         codigo = creado.code;
+        token = creado.delete_token;
         enlace.href = creado.short_url;
         enlace.textContent = creado.short_url;
+        document.getElementById("vence").textContent = creado.expires_at
+          ? "Vence el " + new Date(creado.expires_at).toLocaleString("es-PE")
+          : "No vence";
         clics.textContent = "";
         copiar.textContent = "Copiar";
         resultado.hidden = false;
@@ -158,6 +180,21 @@
         clics.textContent = datos.clicks === 1 ? "1 clic" : datos.clicks + " clics";
       } catch (e) {
         mostrarError(e.message || "No se pudieron consultar los clics.");
+      }
+    });
+
+    document.getElementById("eliminar").addEventListener("click", async () => {
+      error.hidden = true;
+      try {
+        const respuesta = await fetch("/api/links/" + codigo, {
+          method: "DELETE",
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (!respuesta.ok) throw new Error((await respuesta.json()).error);
+        resultado.hidden = true;
+        formulario.reset();
+      } catch (e) {
+        mostrarError(e.message || "No se pudo eliminar el enlace.");
       }
     });
   </script>

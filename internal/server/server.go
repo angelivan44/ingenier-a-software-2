@@ -2,11 +2,14 @@
 package server
 
 import (
+	"bytes"
 	_ "embed" // Permite incluir index.html dentro del binario.
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/angelivan44/ingenier-a-software-2/internal/links"
@@ -32,9 +35,57 @@ func New(service *links.Service) http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/links", s.createLink)
 	mux.HandleFunc("GET /api/links/{code}", s.linkStats)
+	mux.HandleFunc("DELETE /api/links/{code}", s.deleteLink)
 	mux.HandleFunc("GET /{code}", s.redirect)
-	return mux
+	return jsonErrors(mux)
 }
+
+// jsonErrors hace que las rutas y métodos que no existen respondan JSON como
+// el resto de la API. Sin esto, ServeMux responde texto plano.
+func jsonErrors(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// Ninguna ruta coincide: se deja responder al enrutador en un
+		// registro para conocer el código y la cabecera Allow.
+		rec := &responseRecord{header: http.Header{}, status: http.StatusOK}
+		mux.ServeHTTP(rec, r)
+
+		switch rec.status {
+		case http.StatusNotFound:
+			writeError(w, http.StatusNotFound, "ruta no encontrada")
+		case http.StatusMethodNotAllowed:
+			w.Header().Set("Allow", rec.header.Get("Allow"))
+			writeError(w, http.StatusMethodNotAllowed, "método no permitido")
+		default:
+			// Otras respuestas del enrutador, como la redirección de rutas
+			// con barras repetidas, se envían tal cual.
+			for key, values := range rec.header {
+				w.Header()[key] = values
+			}
+			w.WriteHeader(rec.status)
+			if _, err := w.Write(rec.body.Bytes()); err != nil {
+				log.Printf("no se pudo escribir la respuesta: %v", err)
+			}
+		}
+	})
+}
+
+// responseRecord guarda una respuesta en memoria en lugar de enviarla.
+type responseRecord struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (r *responseRecord) Header() http.Header { return r.header }
+
+func (r *responseRecord) WriteHeader(status int) { r.status = status }
+
+func (r *responseRecord) Write(b []byte) (int, error) { return r.body.Write(b) }
 
 // home muestra la página para crear enlaces desde el navegador.
 func (s *Server) home(w http.ResponseWriter, _ *http.Request) {
@@ -50,7 +101,9 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createLinkRequest struct {
-	URL string `json:"url"`
+	URL           string `json:"url"`
+	Alias         string `json:"alias"`
+	ExpiresInDays int    `json:"expires_in_days"`
 }
 
 type linkResponse struct {
@@ -59,30 +112,49 @@ type linkResponse struct {
 	ShortURL  string    `json:"short_url"`
 	Clicks    int64     `json:"clicks"`
 	CreatedAt time.Time `json:"created_at"`
+	// ExpiresAt se omite si el enlace no vence.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// DeleteToken solo se envía al crear el enlace.
+	DeleteToken string `json:"delete_token,omitempty"`
 }
 
 func newLinkResponse(r *http.Request, link links.Link) linkResponse {
-	return linkResponse{
+	response := linkResponse{
 		Code:      link.Code,
 		URL:       link.URL,
 		ShortURL:  baseURL(r) + "/" + link.Code,
 		Clicks:    link.Clicks,
 		CreatedAt: link.CreatedAt,
 	}
+	if !link.ExpiresAt.IsZero() {
+		response.ExpiresAt = &link.ExpiresAt
+	}
+	return response
 }
 
-// createLink recibe una URL y responde con su enlace corto.
+// createLink recibe una URL, y opcionalmente un alias, y responde con su
+// enlace corto.
 func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 	var req createLinkRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "el cuerpo debe ser JSON con el campo url")
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "el cuerpo debe ser un solo objeto JSON con el campo url")
 		return
 	}
 
-	link, err := s.links.Create(r.Context(), req.URL)
-	if errors.Is(err, links.ErrInvalidURL) {
+	link, err := s.links.Create(r.Context(), links.NewLink{
+		URL:           req.URL,
+		Alias:         req.Alias,
+		ExpiresInDays: req.ExpiresInDays,
+		ServiceHost:   r.Host,
+	})
+	if errors.Is(err, links.ErrInvalidURL) || errors.Is(err, links.ErrInvalidAlias) ||
+		errors.Is(err, links.ErrInvalidExpiration) || errors.Is(err, links.ErrSelfLink) {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, links.ErrAliasTaken) {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
@@ -91,10 +163,34 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, newLinkResponse(r, link))
+	response := newLinkResponse(r, link)
+	response.DeleteToken = link.DeleteToken
+	writeJSON(w, http.StatusCreated, response)
 }
 
-// linkStats muestra los datos de un enlace sin contarlo como clic.
+// deleteLink elimina un enlace si la petición trae el token que se entregó
+// al crearlo, en la cabecera Authorization: Bearer <token>.
+func (s *Server) deleteLink(w http.ResponseWriter, r *http.Request) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || strings.TrimSpace(token) == "" {
+		writeError(w, http.StatusUnauthorized, "falta el token para eliminar el enlace")
+		return
+	}
+
+	err := s.links.Delete(r.Context(), r.PathValue("code"), strings.TrimSpace(token))
+	if errors.Is(err, links.ErrForbidden) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeLookupError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// linkStats muestra los datos de un enlace sin contarlo como clic. También
+// responde para enlaces vencidos, así el dueño puede ver sus clics.
 func (s *Server) linkStats(w http.ResponseWriter, r *http.Request) {
 	link, err := s.links.Resolve(r.Context(), r.PathValue("code"))
 	if err != nil {
@@ -109,7 +205,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	// Una petición HEAD solo comprueba el enlace: nadie lo visitó de verdad.
 	lookup := s.links.Visit
 	if r.Method == http.MethodHead {
-		lookup = s.links.Resolve
+		lookup = s.links.Check
 	}
 
 	link, err := lookup(r.Context(), r.PathValue("code"))
@@ -129,6 +225,10 @@ func writeLookupError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "enlace no encontrado")
 		return
 	}
+	if errors.Is(err, links.ErrExpired) {
+		writeError(w, http.StatusGone, err.Error())
+		return
+	}
 	log.Printf("no se pudo obtener el enlace: %v", err)
 	writeError(w, http.StatusInternalServerError, "no se pudo obtener el enlace")
 }
@@ -140,6 +240,20 @@ func baseURL(r *http.Request) string {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host
+}
+
+// decodeJSON lee un único valor JSON. Decode solo lee el primero, así que
+// después se exige el fin del cuerpo: datos extra indican una petición mal
+// formada. Los espacios y saltos de línea al final se permiten.
+func decodeJSON(body io.Reader, dst any) error {
+	decoder := json.NewDecoder(body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("hay datos después del JSON")
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
