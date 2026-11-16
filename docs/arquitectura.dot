@@ -1,0 +1,44 @@
+// Arquitectura y flujo de despliegue del acortador de enlaces.
+// Para regenerar la imagen: dot -Tpng -Gdpi=160 docs/arquitectura.dot -o docs/arquitectura.png
+digraph arquitectura {
+  rankdir=TB;
+  compound=true;
+  fontname="Helvetica";
+  nodesep=0.45;
+  ranksep=0.55;
+  node [shape=box, style="rounded,filled", fillcolor="#ffffff", color="#3c5a54", fontname="Helvetica", fontsize=12, margin="0.14,0.09"];
+  edge [color="#3c5a54", fontname="Helvetica", fontsize=10];
+
+  usuario [label="Usuario\n(navegador o API)", fillcolor="#e6f1ee"];
+  desarrollador [label="Desarrollador", fillcolor="#e6f1ee"];
+
+  subgraph cluster_github {
+    label="GitHub";
+    style="rounded"; color="#8a8a82";
+    repositorio [label="Repositorio\nmain, develop, feature/*"];
+    actions [label="GitHub Actions\nformato, lint, pruebas, build"];
+  }
+
+  subgraph cluster_vercel {
+    label="Vercel: aplicación en Go";
+    style="rounded"; color="#8a8a82";
+    server [label="internal/server\nrutas HTTP"];
+    service [label="links.Service\nreglas de negocio"];
+    store [label="interfaz links.Store", style="rounded,filled,dashed"];
+    postgres [label="PostgresStore"];
+    memoria [label="MemoryStore\n(desarrollo y pruebas)"];
+  }
+
+  neon [label="Neon Postgres\ntabla links", shape=cylinder, fillcolor="#e6f1ee"];
+
+  usuario -> server [label="HTTPS"];
+  server -> service;
+  service -> store;
+  store -> postgres [style=dashed, arrowhead=onormal];
+  store -> memoria [style=dashed, arrowhead=onormal];
+  postgres -> neon [label="SQL (pgx)"];
+
+  desarrollador -> repositorio [label="git push"];
+  repositorio -> actions [label="push a main\no develop"];
+  repositorio -> server [label="despliegue automático", lhead=cluster_vercel];
+}
