@@ -50,7 +50,7 @@ Respuesta (`201 Created`):
 
 `delete_token` solo se entrega en esta respuesta: guárdalo si quieres eliminar el enlace después.
 
-Si la URL no es `http` o `https`, o no incluye dominio, responde `400 Bad Request`.
+Si la URL no es `http` o `https`, no incluye dominio o lleva usuario y contraseña (`https://usuario:clave@...`), responde `400 Bad Request`.
 
 Para elegir el código, envía un `alias` opcional:
 

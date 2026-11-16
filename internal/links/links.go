@@ -28,7 +28,7 @@ const (
 
 var (
 	// ErrInvalidURL indica que la URL recibida no se puede acortar.
-	ErrInvalidURL = errors.New("la URL debe ser http o https e incluir un dominio")
+	ErrInvalidURL = errors.New("la URL debe ser http o https, incluir un dominio y no llevar usuario ni contraseña")
 	// ErrCodeExists indica que el código generado ya está en uso.
 	ErrCodeExists = errors.New("el código ya existe")
 	// ErrNotFound indica que no hay un enlace con ese código.
@@ -259,7 +259,8 @@ func (s *Service) Visit(ctx context.Context, code string) (Link, error) {
 	return link, nil
 }
 
-// validateURL acepta solo URLs absolutas http o https con dominio.
+// validateURL acepta solo URLs absolutas http o https con dominio y sin
+// credenciales: la URL de destino es pública en la consulta del enlace.
 func validateURL(rawURL string) (string, error) {
 	trimmed := strings.TrimSpace(rawURL)
 	parsed, err := url.ParseRequestURI(trimmed)
@@ -269,7 +270,7 @@ func validateURL(rawURL string) (string, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", ErrInvalidURL
 	}
-	if parsed.Hostname() == "" {
+	if parsed.Hostname() == "" || parsed.User != nil {
 		return "", ErrInvalidURL
 	}
 	return trimmed, nil
