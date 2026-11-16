@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/angelivan44/ingenier-a-software-2/internal/links"
 )
@@ -25,6 +26,10 @@ func (failingStore) Find(context.Context, string) (links.Link, error) {
 
 func (failingStore) IncrementClicks(context.Context, string) (links.Link, error) {
 	return links.Link{}, errors.New("base de datos caída")
+}
+
+func (failingStore) Delete(context.Context, string) error {
+	return errors.New("base de datos caída")
 }
 
 func newTestHandler() http.Handler {
@@ -255,5 +260,177 @@ func TestCreateLinkNoExponeErroresInternos(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "base de datos") {
 		t.Fatalf("la respuesta expone el error interno: %s", rec.Body)
+	}
+}
+
+func TestCreateLinkConAlias(t *testing.T) {
+	handler := newTestHandler()
+
+	rec := postLink(handler, `{"url":"https://example.com/articulo","alias":"articulo"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d, se esperaba %d: %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+	var got linkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("respuesta no es JSON: %v", err)
+	}
+	if got.ShortURL != "http://example.com/articulo" {
+		t.Errorf("ShortURL = %q", got.ShortURL)
+	}
+
+	redirect := get(handler, "/articulo")
+	if redirect.Code != http.StatusFound || redirect.Header().Get("Location") != "https://example.com/articulo" {
+		t.Errorf("redirección = %d %q", redirect.Code, redirect.Header().Get("Location"))
+	}
+}
+
+func TestCreateLinkRechazaAliasInvalido(t *testing.T) {
+	rec := postLink(newTestHandler(), `{"url":"https://example.com","alias":"a b"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateLinkRespondeConflictoSiElAliasExiste(t *testing.T) {
+	handler := newTestHandler()
+	postLink(handler, `{"url":"https://example.com","alias":"promo"}`)
+
+	rec := postLink(handler, `{"url":"https://otro.com","alias":"promo"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusConflict)
+	}
+
+	// El enlace original no debe cambiar.
+	if stats := statsOf(t, handler, "promo"); stats.URL != "https://example.com" {
+		t.Errorf("URL = %q, el alias se sobrescribió", stats.URL)
+	}
+}
+
+func deleteLink(handler http.Handler, code, authorization string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, "/api/links/"+code, nil)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCreateLinkEntregaTokenSoloAlCrear(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	if link.DeleteToken == "" {
+		t.Fatal("la respuesta de creación no incluye delete_token")
+	}
+	if rec := get(handler, "/api/links/"+link.Code); strings.Contains(rec.Body.String(), "delete_token") {
+		t.Errorf("la consulta expone el token: %s", rec.Body)
+	}
+}
+
+func TestDeleteLinkConTokenCorrecto(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	rec := deleteLink(handler, link.Code, "Bearer "+link.DeleteToken)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("código = %d, se esperaba %d: %s", rec.Code, http.StatusNoContent, rec.Body)
+	}
+	if rec := get(handler, "/"+link.Code); rec.Code != http.StatusNotFound {
+		t.Errorf("redirección = %d, se esperaba %d tras eliminar", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteLinkRespuestasDeError(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	casos := []struct {
+		nombre        string
+		code          string
+		authorization string
+		esperado      int
+	}{
+		{"sin cabecera", link.Code, "", http.StatusUnauthorized},
+		{"sin Bearer", link.Code, link.DeleteToken, http.StatusUnauthorized},
+		{"Bearer vacío", link.Code, "Bearer   ", http.StatusUnauthorized},
+		{"token incorrecto", link.Code, "Bearer otro", http.StatusForbidden},
+		{"código inexistente", "noexiste", "Bearer " + link.DeleteToken, http.StatusNotFound},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if rec := deleteLink(handler, c.code, c.authorization); rec.Code != c.esperado {
+				t.Fatalf("código = %d, se esperaba %d", rec.Code, c.esperado)
+			}
+		})
+	}
+}
+
+func TestDeleteLinkNoExponeErroresInternos(t *testing.T) {
+	rec := deleteLink(New(links.NewService(failingStore{})), "abc1234", "Bearer token")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "base de datos") {
+		t.Fatalf("la respuesta expone el error interno: %s", rec.Body)
+	}
+}
+
+func TestCreateLinkConExpiracion(t *testing.T) {
+	rec := postLink(newTestHandler(), `{"url":"https://example.com","expires_in_days":7}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d, se esperaba %d: %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+
+	var got linkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("respuesta no es JSON: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(got.CreatedAt.AddDate(0, 0, 7)) {
+		t.Errorf("expires_at = %v, created_at = %v", got.ExpiresAt, got.CreatedAt)
+	}
+}
+
+func TestCreateLinkSinExpiracionOmiteElCampo(t *testing.T) {
+	rec := postLink(newTestHandler(), `{"url":"https://example.com"}`)
+
+	if strings.Contains(rec.Body.String(), "expires_at") {
+		t.Errorf("la respuesta incluye expires_at: %s", rec.Body)
+	}
+}
+
+func TestCreateLinkRechazaExpiracionFueraDeRango(t *testing.T) {
+	for _, body := range []string{
+		`{"url":"https://example.com","expires_in_days":-1}`,
+		`{"url":"https://example.com","expires_in_days":366}`,
+		`{"url":"https://example.com","expires_in_days":"7"}`,
+	} {
+		if rec := postLink(newTestHandler(), body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: código = %d, se esperaba %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestRedirectRespondeGoneSiElEnlaceVencio(t *testing.T) {
+	ahora := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	handler := New(links.NewServiceWithClock(links.NewMemoryStore(), func() time.Time { return ahora }))
+	postLink(handler, `{"url":"https://example.com","alias":"oferta","expires_in_days":1}`)
+
+	ahora = ahora.AddDate(0, 0, 1)
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req := httptest.NewRequest(method, "/oferta", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusGone {
+			t.Errorf("%s: código = %d, se esperaba %d", method, rec.Code, http.StatusGone)
+		}
+	}
+
+	// La consulta sigue disponible para ver los clics.
+	if stats := statsOf(t, handler, "oferta"); stats.ExpiresAt == nil {
+		t.Error("la consulta no muestra expires_at")
 	}
 }
