@@ -160,6 +160,9 @@ func TestCreateRechazaURLInvalida(t *testing.T) {
 		"sin dominio":  "https://",
 		"solo puerto":  "http://:8080",
 		"solo espacio": "   ",
+		// Defecto: las credenciales quedarían visibles en la consulta pública.
+		"con usuario y contraseña": "https://usuario:clave@example.com",
+		"con usuario":              "https://usuario@example.com",
 	}
 
 	for nombre, url := range casos {
