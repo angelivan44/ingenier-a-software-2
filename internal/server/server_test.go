@@ -434,3 +434,28 @@ func TestRedirectRespondeGoneSiElEnlaceVencio(t *testing.T) {
 		t.Error("la consulta no muestra expires_at")
 	}
 }
+
+// Defecto: un enlace hacia el propio acortador crea redirecciones en cadena,
+// y dos enlaces que se apuntan entre sí forman un bucle.
+func TestCreateLinkRechazaURLDelPropioAcortador(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	// httptest usa example.com como host del acortador.
+	for _, url := range []string{
+		link.ShortURL,
+		"https://example.com/" + link.Code,
+		"http://EXAMPLE.com/otro",
+		"http://example.com:80/otro",
+	} {
+		rec := postLink(handler, `{"url":"`+url+`"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: código = %d, se esperaba %d", url, rec.Code, http.StatusBadRequest)
+		}
+	}
+
+	// Un subdominio u otro sitio sí se permiten.
+	if rec := postLink(handler, `{"url":"https://blog.example.com/"}`); rec.Code != http.StatusCreated {
+		t.Errorf("subdominio: código = %d, se esperaba %d", rec.Code, http.StatusCreated)
+	}
+}
