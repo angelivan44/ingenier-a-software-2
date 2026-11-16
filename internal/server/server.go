@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/angelivan44/ingenier-a-software-2/internal/links"
@@ -32,6 +33,7 @@ func New(service *links.Service) http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/links", s.createLink)
 	mux.HandleFunc("GET /api/links/{code}", s.linkStats)
+	mux.HandleFunc("DELETE /api/links/{code}", s.deleteLink)
 	mux.HandleFunc("GET /{code}", s.redirect)
 	return mux
 }
@@ -60,6 +62,8 @@ type linkResponse struct {
 	ShortURL  string    `json:"short_url"`
 	Clicks    int64     `json:"clicks"`
 	CreatedAt time.Time `json:"created_at"`
+	// DeleteToken solo se envía al crear el enlace.
+	DeleteToken string `json:"delete_token,omitempty"`
 }
 
 func newLinkResponse(r *http.Request, link links.Link) linkResponse {
@@ -97,7 +101,30 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, newLinkResponse(r, link))
+	response := newLinkResponse(r, link)
+	response.DeleteToken = link.DeleteToken
+	writeJSON(w, http.StatusCreated, response)
+}
+
+// deleteLink elimina un enlace si la petición trae el token que se entregó
+// al crearlo, en la cabecera Authorization: Bearer <token>.
+func (s *Server) deleteLink(w http.ResponseWriter, r *http.Request) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || strings.TrimSpace(token) == "" {
+		writeError(w, http.StatusUnauthorized, "falta el token para eliminar el enlace")
+		return
+	}
+
+	err := s.links.Delete(r.Context(), r.PathValue("code"), strings.TrimSpace(token))
+	if errors.Is(err, links.ErrForbidden) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeLookupError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // linkStats muestra los datos de un enlace sin contarlo como clic.

@@ -4,6 +4,9 @@ package links
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -15,6 +18,7 @@ import (
 
 const (
 	codeLength  = 7
+	tokenLength = 32
 	maxAttempts = 5
 	alphabet    = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
@@ -30,6 +34,8 @@ var (
 	ErrInvalidAlias = errors.New("el alias debe tener de 3 a 30 letras, números, guiones o guiones bajos y no ser una ruta reservada")
 	// ErrAliasTaken indica que otro enlace ya usa el alias pedido.
 	ErrAliasTaken = errors.New("el alias ya está en uso")
+	// ErrForbidden indica que el token no permite eliminar el enlace.
+	ErrForbidden = errors.New("el token no permite eliminar este enlace")
 )
 
 // aliasPattern define los caracteres y el largo permitidos para un alias.
@@ -52,6 +58,12 @@ type Link struct {
 	URL       string
 	Clicks    int64
 	CreatedAt time.Time
+	// DeleteTokenHash es el hash del token para eliminar el enlace. Se guarda
+	// el hash y no el token, así una filtración de la base no permite borrar.
+	DeleteTokenHash string
+	// DeleteToken solo se llena al crear el enlace, para entregarlo una vez.
+	// No se guarda.
+	DeleteToken string
 }
 
 // Store guarda los enlaces. Al ser una interfaz, el almacenamiento
@@ -62,6 +74,8 @@ type Store interface {
 	// IncrementClicks suma un clic y devuelve el enlace actualizado.
 	// Es una sola operación para no perder clics simultáneos.
 	IncrementClicks(ctx context.Context, code string) (Link, error)
+	// Delete borra el enlace o devuelve ErrNotFound si no existe.
+	Delete(ctx context.Context, code string) error
 }
 
 // Service aplica las reglas para crear enlaces.
@@ -93,7 +107,10 @@ func (s *Service) Create(ctx context.Context, input NewLink) (Link, error) {
 			return Link{}, fmt.Errorf("generar código: %w", err)
 		}
 
-		link := Link{Code: code, URL: target, CreatedAt: time.Now().UTC()}
+		link, err := newLink(code, target)
+		if err != nil {
+			return Link{}, err
+		}
 		err = s.store.Save(ctx, link)
 		if err == nil {
 			return link, nil
@@ -112,8 +129,11 @@ func (s *Service) createWithAlias(ctx context.Context, target, alias string) (Li
 		return Link{}, err
 	}
 
-	link := Link{Code: alias, URL: target, CreatedAt: time.Now().UTC()}
-	err := s.store.Save(ctx, link)
+	link, err := newLink(alias, target)
+	if err != nil {
+		return Link{}, err
+	}
+	err = s.store.Save(ctx, link)
 	if errors.Is(err, ErrCodeExists) {
 		return Link{}, ErrAliasTaken
 	}
@@ -121,6 +141,49 @@ func (s *Service) createWithAlias(ctx context.Context, target, alias string) (Li
 		return Link{}, fmt.Errorf("guardar enlace: %w", err)
 	}
 	return link, nil
+}
+
+// newLink arma un enlace nuevo con su token para eliminarlo.
+func newLink(code, target string) (Link, error) {
+	token, err := randomString(tokenLength)
+	if err != nil {
+		return Link{}, fmt.Errorf("generar token: %w", err)
+	}
+	return Link{
+		Code:            code,
+		URL:             target,
+		CreatedAt:       time.Now().UTC(),
+		DeleteTokenHash: hashToken(token),
+		DeleteToken:     token,
+	}, nil
+}
+
+// Delete elimina el enlace si el token coincide con el que se entregó al
+// crearlo.
+func (s *Service) Delete(ctx context.Context, code, token string) error {
+	link, err := s.store.Find(ctx, code)
+	if err != nil {
+		return fmt.Errorf("buscar enlace: %w", err)
+	}
+
+	// Los enlaces creados antes de esta función no tienen token: nadie
+	// puede eliminarlos. La comparación en tiempo constante evita deducir
+	// el hash midiendo cuánto tarda la respuesta.
+	if token == "" || link.DeleteTokenHash == "" ||
+		subtle.ConstantTimeCompare([]byte(hashToken(token)), []byte(link.DeleteTokenHash)) != 1 {
+		return ErrForbidden
+	}
+
+	if err := s.store.Delete(ctx, code); err != nil {
+		return fmt.Errorf("eliminar enlace: %w", err)
+	}
+	return nil
+}
+
+// hashToken devuelve el SHA-256 del token en hexadecimal.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // Resolve busca el enlace asociado a un código sin contar un clic.
@@ -168,14 +231,19 @@ func validateAlias(alias string) error {
 
 // generateCode crea un código aleatorio de letras y números.
 func generateCode() (string, error) {
+	return randomString(codeLength)
+}
+
+// randomString crea una cadena aleatoria de letras y números.
+func randomString(length int) (string, error) {
 	limit := big.NewInt(int64(len(alphabet)))
-	code := make([]byte, codeLength)
-	for i := range code {
+	out := make([]byte, length)
+	for i := range out {
 		n, err := rand.Int(rand.Reader, limit)
 		if err != nil {
 			return "", err
 		}
-		code[i] = alphabet[n.Int64()]
+		out[i] = alphabet[n.Int64()]
 	}
-	return string(code), nil
+	return string(out), nil
 }

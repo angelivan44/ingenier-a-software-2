@@ -27,6 +27,10 @@ func (failingStore) IncrementClicks(context.Context, string) (links.Link, error)
 	return links.Link{}, errors.New("base de datos caída")
 }
 
+func (failingStore) Delete(context.Context, string) error {
+	return errors.New("base de datos caída")
+}
+
 func newTestHandler() http.Handler {
 	return New(links.NewService(links.NewMemoryStore()))
 }
@@ -299,5 +303,76 @@ func TestCreateLinkRespondeConflictoSiElAliasExiste(t *testing.T) {
 	// El enlace original no debe cambiar.
 	if stats := statsOf(t, handler, "promo"); stats.URL != "https://example.com" {
 		t.Errorf("URL = %q, el alias se sobrescribió", stats.URL)
+	}
+}
+
+func deleteLink(handler http.Handler, code, authorization string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, "/api/links/"+code, nil)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCreateLinkEntregaTokenSoloAlCrear(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	if link.DeleteToken == "" {
+		t.Fatal("la respuesta de creación no incluye delete_token")
+	}
+	if rec := get(handler, "/api/links/"+link.Code); strings.Contains(rec.Body.String(), "delete_token") {
+		t.Errorf("la consulta expone el token: %s", rec.Body)
+	}
+}
+
+func TestDeleteLinkConTokenCorrecto(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	rec := deleteLink(handler, link.Code, "Bearer "+link.DeleteToken)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("código = %d, se esperaba %d: %s", rec.Code, http.StatusNoContent, rec.Body)
+	}
+	if rec := get(handler, "/"+link.Code); rec.Code != http.StatusNotFound {
+		t.Errorf("redirección = %d, se esperaba %d tras eliminar", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteLinkRespuestasDeError(t *testing.T) {
+	handler := newTestHandler()
+	link := createLink(t, handler)
+
+	casos := []struct {
+		nombre        string
+		code          string
+		authorization string
+		esperado      int
+	}{
+		{"sin cabecera", link.Code, "", http.StatusUnauthorized},
+		{"sin Bearer", link.Code, link.DeleteToken, http.StatusUnauthorized},
+		{"Bearer vacío", link.Code, "Bearer   ", http.StatusUnauthorized},
+		{"token incorrecto", link.Code, "Bearer otro", http.StatusForbidden},
+		{"código inexistente", "noexiste", "Bearer " + link.DeleteToken, http.StatusNotFound},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if rec := deleteLink(handler, c.code, c.authorization); rec.Code != c.esperado {
+				t.Fatalf("código = %d, se esperaba %d", rec.Code, c.esperado)
+			}
+		})
+	}
+}
+
+func TestDeleteLinkNoExponeErroresInternos(t *testing.T) {
+	rec := deleteLink(New(links.NewService(failingStore{})), "abc1234", "Bearer token")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "base de datos") {
+		t.Fatalf("la respuesta expone el error interno: %s", rec.Body)
 	}
 }

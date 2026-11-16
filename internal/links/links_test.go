@@ -32,6 +32,10 @@ func (f *fakeStore) IncrementClicks(context.Context, string) (Link, error) {
 	return Link{}, f.err
 }
 
+func (f *fakeStore) Delete(context.Context, string) error {
+	return f.err
+}
+
 func TestVisitSumaUnClic(t *testing.T) {
 	service := NewService(NewMemoryStore())
 	creado, err := service.Create(context.Background(), NewLink{URL: "https://example.com"})
@@ -305,6 +309,102 @@ func TestCreateConAliasConservaErroresDelAlmacenamiento(t *testing.T) {
 	store := &fakeStore{failures: 1, err: errBase}
 
 	_, err := NewService(store).Create(context.Background(), NewLink{URL: "https://example.com", Alias: "promo"})
+	if !errors.Is(err, errBase) {
+		t.Fatalf("error = %v, se esperaba el error original", err)
+	}
+}
+
+// createForDelete crea un enlace y devuelve su código y su token.
+func createForDelete(t *testing.T, service *Service) Link {
+	t.Helper()
+
+	link, err := service.Create(context.Background(), NewLink{URL: "https://example.com"})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	return link
+}
+
+func TestCreateEntregaTokenYGuardaSoloElHash(t *testing.T) {
+	store := NewMemoryStore()
+	link := createForDelete(t, NewService(store))
+
+	if len(link.DeleteToken) != tokenLength {
+		t.Fatalf("token = %q, se esperaban %d caracteres", link.DeleteToken, tokenLength)
+	}
+	guardado, err := store.Find(context.Background(), link.Code)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if guardado.DeleteToken != "" {
+		t.Error("el token en claro no debería guardarse")
+	}
+	if guardado.DeleteTokenHash != hashToken(link.DeleteToken) {
+		t.Error("el hash guardado no corresponde al token entregado")
+	}
+}
+
+func TestDeleteConTokenCorrecto(t *testing.T) {
+	service := NewService(NewMemoryStore())
+	link := createForDelete(t, service)
+
+	if err := service.Delete(context.Background(), link.Code, link.DeleteToken); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if _, err := service.Resolve(context.Background(), link.Code); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, el enlace sigue guardado", err)
+	}
+}
+
+// Caja blanca: cubre cada condición que rechaza el token en Delete.
+func TestDeleteRechazaTokenInvalido(t *testing.T) {
+	service := NewService(NewMemoryStore())
+	link := createForDelete(t, service)
+	otro := createForDelete(t, service)
+
+	casos := map[string]string{
+		"vacío":            "",
+		"incorrecto":       "no-es-el-token",
+		"de otro enlace":   otro.DeleteToken,
+		"el hash guardado": hashToken(link.DeleteToken),
+	}
+	for nombre, token := range casos {
+		t.Run(nombre, func(t *testing.T) {
+			if err := service.Delete(context.Background(), link.Code, token); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("error = %v, se esperaba ErrForbidden", err)
+			}
+		})
+	}
+
+	if _, err := service.Resolve(context.Background(), link.Code); err != nil {
+		t.Fatalf("el enlace no debería eliminarse: %v", err)
+	}
+}
+
+func TestDeleteRechazaEnlacesSinToken(t *testing.T) {
+	// Un enlace creado antes de esta función tiene el hash vacío.
+	store := NewMemoryStore()
+	if err := store.Save(context.Background(), Link{Code: "antiguo", URL: "https://example.com"}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	err := NewService(store).Delete(context.Background(), "antiguo", "cualquiera")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("error = %v, se esperaba ErrForbidden", err)
+	}
+}
+
+func TestDeleteFallaSiElCodigoNoExiste(t *testing.T) {
+	err := NewService(NewMemoryStore()).Delete(context.Background(), "noexiste", "token")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, se esperaba ErrNotFound", err)
+	}
+}
+
+func TestDeleteConservaErroresDelAlmacenamiento(t *testing.T) {
+	errBase := errors.New("base de datos caída")
+
+	err := NewService(&fakeStore{err: errBase}).Delete(context.Background(), "abc1234", "token")
 	if !errors.Is(err, errBase) {
 		t.Fatalf("error = %v, se esperaba el error original", err)
 	}
