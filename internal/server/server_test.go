@@ -487,3 +487,42 @@ func TestCreateLinkRechazaDatosDespuesDelJSON(t *testing.T) {
 		t.Errorf("con salto de línea: código = %d, se esperaba %d", rec.Code, http.StatusCreated)
 	}
 }
+
+// Defecto: las rutas y métodos que no existen responden texto plano del
+// enrutador, y la página y los clientes de la API esperan JSON.
+func TestRutasDesconocidasRespondenJSON(t *testing.T) {
+	casos := []struct {
+		method, path string
+		esperado     int
+		allow        string
+	}{
+		{http.MethodGet, "/abc1234/", http.StatusNotFound, ""},
+		{http.MethodGet, "/api/links", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodPut, "/api/links/abc1234", http.StatusMethodNotAllowed, "DELETE"},
+		{http.MethodPost, "/abc1234", http.StatusMethodNotAllowed, "GET"},
+	}
+
+	for _, c := range casos {
+		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			req := httptest.NewRequest(c.method, c.path, nil)
+			req.Host = testHost
+			rec := httptest.NewRecorder()
+			newTestHandler().ServeHTTP(rec, req)
+
+			if rec.Code != c.esperado {
+				t.Fatalf("código = %d, se esperaba %d", rec.Code, c.esperado)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf("Content-Type = %q, se esperaba application/json", got)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
+				t.Errorf("cuerpo = %q, se esperaba JSON con el campo error", rec.Body)
+			}
+			// Se conserva la cabecera Allow que indica los métodos válidos.
+			if c.allow != "" && !strings.Contains(rec.Header().Get("Allow"), c.allow) {
+				t.Errorf("Allow = %q, debería incluir %s", rec.Header().Get("Allow"), c.allow)
+			}
+		})
+	}
+}
