@@ -50,7 +50,8 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createLinkRequest struct {
-	URL string `json:"url"`
+	URL   string `json:"url"`
+	Alias string `json:"alias"`
 }
 
 type linkResponse struct {
@@ -71,7 +72,8 @@ func newLinkResponse(r *http.Request, link links.Link) linkResponse {
 	}
 }
 
-// createLink recibe una URL y responde con su enlace corto.
+// createLink recibe una URL, y opcionalmente un alias, y responde con su
+// enlace corto.
 func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 	var req createLinkRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -80,9 +82,13 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := s.links.Create(r.Context(), req.URL)
-	if errors.Is(err, links.ErrInvalidURL) {
+	link, err := s.links.Create(r.Context(), links.NewLink{URL: req.URL, Alias: req.Alias})
+	if errors.Is(err, links.ErrInvalidURL) || errors.Is(err, links.ErrInvalidAlias) {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, links.ErrAliasTaken) {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {

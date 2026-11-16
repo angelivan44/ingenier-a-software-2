@@ -257,3 +257,47 @@ func TestCreateLinkNoExponeErroresInternos(t *testing.T) {
 		t.Fatalf("la respuesta expone el error interno: %s", rec.Body)
 	}
 }
+
+func TestCreateLinkConAlias(t *testing.T) {
+	handler := newTestHandler()
+
+	rec := postLink(handler, `{"url":"https://example.com/articulo","alias":"articulo"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("código = %d, se esperaba %d: %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+	var got linkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("respuesta no es JSON: %v", err)
+	}
+	if got.ShortURL != "http://example.com/articulo" {
+		t.Errorf("ShortURL = %q", got.ShortURL)
+	}
+
+	redirect := get(handler, "/articulo")
+	if redirect.Code != http.StatusFound || redirect.Header().Get("Location") != "https://example.com/articulo" {
+		t.Errorf("redirección = %d %q", redirect.Code, redirect.Header().Get("Location"))
+	}
+}
+
+func TestCreateLinkRechazaAliasInvalido(t *testing.T) {
+	rec := postLink(newTestHandler(), `{"url":"https://example.com","alias":"a b"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateLinkRespondeConflictoSiElAliasExiste(t *testing.T) {
+	handler := newTestHandler()
+	postLink(handler, `{"url":"https://example.com","alias":"promo"}`)
+
+	rec := postLink(handler, `{"url":"https://otro.com","alias":"promo"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("código = %d, se esperaba %d", rec.Code, http.StatusConflict)
+	}
+
+	// El enlace original no debe cambiar.
+	if stats := statsOf(t, handler, "promo"); stats.URL != "https://example.com" {
+		t.Errorf("URL = %q, el alias se sobrescribió", stats.URL)
+	}
+}

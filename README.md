@@ -50,6 +50,16 @@ Respuesta (`201 Created`):
 
 Si la URL no es `http` o `https`, o no incluye dominio, responde `400 Bad Request`.
 
+Para elegir el código, envía un `alias` opcional:
+
+```bash
+curl -X POST http://localhost:3000/api/links \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/articulo","alias":"mi-promo"}'
+```
+
+El alias debe tener de 3 a 30 letras, números, guiones o guiones bajos, y no puede ser `api` ni `health`. Si no cumple, responde `400 Bad Request`; si otro enlace ya lo usa, `409 Conflict`.
+
 Abrir un enlace corto redirige a la URL original (`302 Found`). Si el código no existe, responde `404 Not Found`:
 
 ```bash
@@ -109,6 +119,23 @@ Las pruebas de Postgres se omiten si no se define `TEST_DATABASE_URL`. Usa una b
 TEST_DATABASE_URL="postgres://usuario:clave@localhost:5432/acortador_test" go test ./...
 ```
 
+Para ver la cobertura por función y un reporte en el navegador:
+
+```bash
+go test -coverprofile=coverage.out ./internal/...
+go tool cover -func=coverage.out
+go tool cover -html=coverage.out
+```
+
 ## Integración continua
 
-Cada push a `main` o `develop` ejecuta el workflow `.github/workflows/ci.yml`, que revisa el formato, analiza el código con `go vet` y `golangci-lint`, corre las pruebas con el detector de condiciones de carrera y compila el servidor.
+Cada push a `main` o `develop`, y cada pull request hacia esas ramas, ejecuta el workflow `.github/workflows/ci.yml`. El workflow:
+
+1. Instala las dependencias.
+2. Revisa el formato y analiza el código con `go vet` y `golangci-lint`.
+3. Corre las pruebas con el detector de condiciones de carrera, contra un Postgres temporal.
+4. Publica la cobertura en el resumen de la ejecución y la sube como artefacto `reporte-cobertura`.
+5. Falla si la cobertura total es menor al 70 %.
+6. Compila el servidor.
+
+Si una prueba falla o la cobertura no llega al mínimo, la ejecución queda en rojo. Como `main` y `develop` están protegidas y exigen que el check pase, ese pull request no se puede fusionar hasta corregirlo.
