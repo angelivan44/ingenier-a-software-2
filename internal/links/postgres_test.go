@@ -35,7 +35,7 @@ func saveTestLink(t *testing.T, store *PostgresStore) Link {
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	link := Link{Code: code, URL: "https://example.com", CreatedAt: time.Now().UTC()}
+	link := Link{Code: code, URL: "https://example.com", CreatedAt: time.Now().UTC(), DeleteTokenHash: hashToken("token")}
 	if err := store.Save(context.Background(), link); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -55,7 +55,8 @@ func TestPostgresGuardaYBusca(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	if found.URL != link.URL || found.Clicks != 0 || !found.CreatedAt.Equal(link.CreatedAt.Truncate(time.Microsecond)) {
+	if found.URL != link.URL || found.Clicks != 0 || found.DeleteTokenHash != link.DeleteTokenHash ||
+		!found.CreatedAt.Equal(link.CreatedAt.Truncate(time.Microsecond)) {
 		t.Errorf("enlace inesperado: %+v", found)
 	}
 }
@@ -78,6 +79,28 @@ func TestPostgresDevuelveNotFound(t *testing.T) {
 	if _, err := store.IncrementClicks(context.Background(), "noexiste"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("IncrementClicks: error = %v, se esperaba ErrNotFound", err)
 	}
+	if err := store.Delete(context.Background(), "noexiste"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete: error = %v, se esperaba ErrNotFound", err)
+	}
+}
+
+func TestPostgresElimina(t *testing.T) {
+	store := newTestPostgres(t)
+	link := saveTestLink(t, store)
+
+	if err := store.Delete(context.Background(), link.Code); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if _, err := store.Find(context.Background(), link.Code); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, el enlace sigue guardado", err)
+	}
+}
+
+func TestPostgresCrearTablaEsIdempotente(t *testing.T) {
+	// Conectarse dos veces vuelve a ejecutar la creación de tabla y la
+	// columna nueva: no debe fallar sobre una tabla que ya existe.
+	newTestPostgres(t)
+	newTestPostgres(t)
 }
 
 func TestPostgresNoPierdeClicsSimultaneos(t *testing.T) {

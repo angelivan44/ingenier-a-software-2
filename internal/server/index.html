@@ -64,6 +64,7 @@
       cursor: pointer;
     }
     button.secundario { background: transparent; color: var(--acento); }
+    .opcional { font-weight: 400; color: var(--suave); }
     #error { margin-top: 12px; color: var(--error); }
     #resultado {
       margin-top: 24px;
@@ -86,6 +87,9 @@
     <form id="formulario">
       <label for="url">Dirección web</label>
       <input id="url" type="url" placeholder="https://ejemplo.com/articulo" required>
+      <label for="alias">Alias <span class="opcional">(opcional)</span></label>
+      <input id="alias" type="text" placeholder="mi-promo" pattern="[A-Za-z0-9_\-]{3,30}"
+             title="De 3 a 30 letras, números, guiones o guiones bajos">
       <button type="submit">Acortar</button>
     </form>
     <div id="error" role="alert" hidden></div>
@@ -95,6 +99,7 @@
       <div class="acciones">
         <button id="copiar" class="secundario" type="button">Copiar</button>
         <button id="ver-clics" class="secundario" type="button">Ver clics</button>
+        <button id="eliminar" class="secundario" type="button">Eliminar</button>
         <span id="clics"></span>
       </div>
     </section>
@@ -108,6 +113,7 @@
     const copiar = document.getElementById("copiar");
     const clics = document.getElementById("clics");
     let codigo = "";
+    let token = "";
 
     function mostrarError(mensaje) {
       error.textContent = mensaje;
@@ -130,9 +136,13 @@
         const creado = await leerJSON("/api/links", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: document.getElementById("url").value }),
+          body: JSON.stringify({
+            url: document.getElementById("url").value,
+            alias: document.getElementById("alias").value.trim(),
+          }),
         });
         codigo = creado.code;
+        token = creado.delete_token;
         enlace.href = creado.short_url;
         enlace.textContent = creado.short_url;
         clics.textContent = "";
@@ -158,6 +168,21 @@
         clics.textContent = datos.clicks === 1 ? "1 clic" : datos.clicks + " clics";
       } catch (e) {
         mostrarError(e.message || "No se pudieron consultar los clics.");
+      }
+    });
+
+    document.getElementById("eliminar").addEventListener("click", async () => {
+      error.hidden = true;
+      try {
+        const respuesta = await fetch("/api/links/" + codigo, {
+          method: "DELETE",
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (!respuesta.ok) throw new Error((await respuesta.json()).error);
+        resultado.hidden = true;
+        formulario.reset();
+      } catch (e) {
+        mostrarError(e.message || "No se pudo eliminar el enlace.");
       }
     });
   </script>

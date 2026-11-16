@@ -21,13 +21,19 @@ CREATE TABLE IF NOT EXISTS links (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )`
 
+// addDeleteToken agrega la columna a tablas creadas antes de poder eliminar
+// enlaces. Esos enlaces quedan con hash vacío y no se pueden eliminar.
+const addDeleteToken = `
+ALTER TABLE links ADD COLUMN IF NOT EXISTS delete_token_hash TEXT NOT NULL DEFAULT ''`
+
 // PostgresStore guarda los enlaces en Postgres, así sobreviven a los
 // reinicios y se comparten entre instancias.
 type PostgresStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewPostgresStore se conecta a la base de datos y crea la tabla si falta.
+// NewPostgresStore se conecta a la base de datos, crea la tabla si falta y
+// agrega las columnas nuevas a una tabla existente.
 func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -42,9 +48,13 @@ func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, 
 	if err != nil {
 		return nil, fmt.Errorf("crear pool: %w", err)
 	}
-	if _, err := pool.Exec(ctx, createTable); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("crear tabla: %w", err)
+	// Van en Exec separados: sin sentencias preparadas no se pueden enviar
+	// dos sentencias en una misma llamada.
+	for _, statement := range []string{createTable, addDeleteToken} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("crear tabla: %w", err)
+		}
 	}
 	return &PostgresStore{pool: pool}, nil
 }
@@ -57,10 +67,10 @@ func (p *PostgresStore) Close() {
 // Save guarda el enlace o devuelve ErrCodeExists si el código ya existe.
 func (p *PostgresStore) Save(ctx context.Context, link Link) error {
 	result, err := p.pool.Exec(ctx,
-		`INSERT INTO links (code, url, clicks, created_at)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO links (code, url, clicks, created_at, delete_token_hash)
+		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (code) DO NOTHING`,
-		link.Code, link.URL, link.Clicks, link.CreatedAt)
+		link.Code, link.URL, link.Clicks, link.CreatedAt, link.DeleteTokenHash)
 	if err != nil {
 		return err
 	}
@@ -73,7 +83,7 @@ func (p *PostgresStore) Save(ctx context.Context, link Link) error {
 // Find devuelve el enlace o ErrNotFound si el código no existe.
 func (p *PostgresStore) Find(ctx context.Context, code string) (Link, error) {
 	row := p.pool.QueryRow(ctx,
-		`SELECT code, url, clicks, created_at FROM links WHERE code = $1`, code)
+		`SELECT code, url, clicks, created_at, delete_token_hash FROM links WHERE code = $1`, code)
 	return scanLink(row)
 }
 
@@ -82,13 +92,25 @@ func (p *PostgresStore) Find(ctx context.Context, code string) (Link, error) {
 func (p *PostgresStore) IncrementClicks(ctx context.Context, code string) (Link, error) {
 	row := p.pool.QueryRow(ctx,
 		`UPDATE links SET clicks = clicks + 1 WHERE code = $1
-		 RETURNING code, url, clicks, created_at`, code)
+		 RETURNING code, url, clicks, created_at, delete_token_hash`, code)
 	return scanLink(row)
+}
+
+// Delete borra el enlace o devuelve ErrNotFound si el código no existe.
+func (p *PostgresStore) Delete(ctx context.Context, code string) error {
+	result, err := p.pool.Exec(ctx, `DELETE FROM links WHERE code = $1`, code)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func scanLink(row pgx.Row) (Link, error) {
 	var link Link
-	err := row.Scan(&link.Code, &link.URL, &link.Clicks, &link.CreatedAt)
+	err := row.Scan(&link.Code, &link.URL, &link.Clicks, &link.CreatedAt, &link.DeleteTokenHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Link{}, ErrNotFound
 	}
