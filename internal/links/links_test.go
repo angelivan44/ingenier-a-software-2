@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -33,7 +34,7 @@ func (f *fakeStore) IncrementClicks(context.Context, string) (Link, error) {
 
 func TestVisitSumaUnClic(t *testing.T) {
 	service := NewService(NewMemoryStore())
-	creado, err := service.Create(context.Background(), "https://example.com")
+	creado, err := service.Create(context.Background(), NewLink{URL: "https://example.com"})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -52,7 +53,7 @@ func TestVisitSumaUnClic(t *testing.T) {
 func TestVisitNoPierdeClicsSimultaneos(t *testing.T) {
 	const visitas = 100
 	service := NewService(NewMemoryStore())
-	creado, err := service.Create(context.Background(), "https://example.com")
+	creado, err := service.Create(context.Background(), NewLink{URL: "https://example.com"})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestVisitConservaErroresDelAlmacenamiento(t *testing.T) {
 
 func TestResolveDevuelveElEnlaceCreado(t *testing.T) {
 	service := NewService(NewMemoryStore())
-	creado, err := service.Create(context.Background(), "https://example.com")
+	creado, err := service.Create(context.Background(), NewLink{URL: "https://example.com"})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestResolveConservaErroresDelAlmacenamiento(t *testing.T) {
 func TestCreateGuardaEnlaceConCodigoValido(t *testing.T) {
 	service := NewService(NewMemoryStore())
 
-	link, err := service.Create(context.Background(), "  https://example.com/ruta?a=1  ")
+	link, err := service.Create(context.Background(), NewLink{URL: "  https://example.com/ruta?a=1  "})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -158,7 +159,7 @@ func TestCreateRechazaURLInvalida(t *testing.T) {
 	for nombre, url := range casos {
 		t.Run(nombre, func(t *testing.T) {
 			service := NewService(NewMemoryStore())
-			if _, err := service.Create(context.Background(), url); !errors.Is(err, ErrInvalidURL) {
+			if _, err := service.Create(context.Background(), NewLink{URL: url}); !errors.Is(err, ErrInvalidURL) {
 				t.Fatalf("error = %v, se esperaba ErrInvalidURL", err)
 			}
 		})
@@ -168,7 +169,7 @@ func TestCreateRechazaURLInvalida(t *testing.T) {
 func TestCreateReintentaSiElCodigoExiste(t *testing.T) {
 	store := &fakeStore{failures: 2, err: ErrCodeExists}
 
-	if _, err := NewService(store).Create(context.Background(), "https://example.com"); err != nil {
+	if _, err := NewService(store).Create(context.Background(), NewLink{URL: "https://example.com"}); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
 	if store.calls != 3 {
@@ -179,7 +180,7 @@ func TestCreateReintentaSiElCodigoExiste(t *testing.T) {
 func TestCreateFallaAlAgotarIntentos(t *testing.T) {
 	store := &fakeStore{failures: maxAttempts, err: ErrCodeExists}
 
-	_, err := NewService(store).Create(context.Background(), "https://example.com")
+	_, err := NewService(store).Create(context.Background(), NewLink{URL: "https://example.com"})
 	if !errors.Is(err, ErrCodeExists) {
 		t.Fatalf("error = %v, se esperaba ErrCodeExists", err)
 	}
@@ -192,7 +193,7 @@ func TestCreateNoReintentaOtrosErrores(t *testing.T) {
 	errBase := errors.New("base de datos caída")
 	store := &fakeStore{failures: 1, err: errBase}
 
-	_, err := NewService(store).Create(context.Background(), "https://example.com")
+	_, err := NewService(store).Create(context.Background(), NewLink{URL: "https://example.com"})
 	if !errors.Is(err, errBase) {
 		t.Fatalf("error = %v, se esperaba el error original", err)
 	}
@@ -210,5 +211,101 @@ func TestMemoryStoreRechazaCodigoDuplicado(t *testing.T) {
 	}
 	if err := store.Save(context.Background(), link); !errors.Is(err, ErrCodeExists) {
 		t.Fatalf("error = %v, se esperaba ErrCodeExists", err)
+	}
+}
+
+func TestCreateUsaElAliasPedido(t *testing.T) {
+	service := NewService(NewMemoryStore())
+
+	link, err := service.Create(context.Background(), NewLink{URL: "https://example.com", Alias: "mi-promo_2026"})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if link.Code != "mi-promo_2026" {
+		t.Errorf("código = %q, se esperaba el alias", link.Code)
+	}
+
+	encontrado, err := service.Resolve(context.Background(), "mi-promo_2026")
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if encontrado.URL != "https://example.com" {
+		t.Errorf("URL = %q", encontrado.URL)
+	}
+}
+
+// Valores límite del largo del alias: el mínimo es 3 y el máximo 30.
+func TestCreateAliasLimitesDeLargo(t *testing.T) {
+	casos := []struct {
+		nombre string
+		alias  string
+		valido bool
+	}{
+		{"2 caracteres", "ab", false},
+		{"3 caracteres", "abc", true},
+		{"30 caracteres", strings.Repeat("a", 30), true},
+		{"31 caracteres", strings.Repeat("a", 31), false},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			_, err := NewService(NewMemoryStore()).Create(context.Background(), NewLink{URL: "https://example.com", Alias: c.alias})
+			if c.valido && err != nil {
+				t.Fatalf("error inesperado: %v", err)
+			}
+			if !c.valido && !errors.Is(err, ErrInvalidAlias) {
+				t.Fatalf("error = %v, se esperaba ErrInvalidAlias", err)
+			}
+		})
+	}
+}
+
+func TestCreateRechazaAliasInvalido(t *testing.T) {
+	casos := map[string]string{
+		"con espacio":        "mi promo",
+		"con barra":          "mi/promo",
+		"con tilde":          "promoción",
+		"con punto":          "mi.promo",
+		"ruta api":           "api",
+		"ruta health":        "health",
+		"ruta en mayúsculas": "HEALTH",
+	}
+
+	for nombre, alias := range casos {
+		t.Run(nombre, func(t *testing.T) {
+			_, err := NewService(NewMemoryStore()).Create(context.Background(), NewLink{URL: "https://example.com", Alias: alias})
+			if !errors.Is(err, ErrInvalidAlias) {
+				t.Fatalf("error = %v, se esperaba ErrInvalidAlias", err)
+			}
+		})
+	}
+}
+
+func TestCreateValidaLaURLAntesQueElAlias(t *testing.T) {
+	_, err := NewService(NewMemoryStore()).Create(context.Background(), NewLink{URL: "ftp://example.com", Alias: "x"})
+	if !errors.Is(err, ErrInvalidURL) {
+		t.Fatalf("error = %v, se esperaba ErrInvalidURL", err)
+	}
+}
+
+func TestCreateRechazaAliasOcupadoSinReintentar(t *testing.T) {
+	store := &fakeStore{failures: 1, err: ErrCodeExists}
+
+	_, err := NewService(store).Create(context.Background(), NewLink{URL: "https://example.com", Alias: "ocupado"})
+	if !errors.Is(err, ErrAliasTaken) {
+		t.Fatalf("error = %v, se esperaba ErrAliasTaken", err)
+	}
+	if store.calls != 1 {
+		t.Errorf("intentos = %d, se esperaba 1", store.calls)
+	}
+}
+
+func TestCreateConAliasConservaErroresDelAlmacenamiento(t *testing.T) {
+	errBase := errors.New("base de datos caída")
+	store := &fakeStore{failures: 1, err: errBase}
+
+	_, err := NewService(store).Create(context.Background(), NewLink{URL: "https://example.com", Alias: "promo"})
+	if !errors.Is(err, errBase) {
+		t.Fatalf("error = %v, se esperaba el error original", err)
 	}
 }

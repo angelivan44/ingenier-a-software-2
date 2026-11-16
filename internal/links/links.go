@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -25,7 +26,25 @@ var (
 	ErrCodeExists = errors.New("el código ya existe")
 	// ErrNotFound indica que no hay un enlace con ese código.
 	ErrNotFound = errors.New("enlace no encontrado")
+	// ErrInvalidAlias indica que el alias pedido no cumple el formato.
+	ErrInvalidAlias = errors.New("el alias debe tener de 3 a 30 letras, números, guiones o guiones bajos y no ser una ruta reservada")
+	// ErrAliasTaken indica que otro enlace ya usa el alias pedido.
+	ErrAliasTaken = errors.New("el alias ya está en uso")
 )
+
+// aliasPattern define los caracteres y el largo permitidos para un alias.
+var aliasPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,30}$`)
+
+// reservedAliases son rutas del servidor: un alias con ese nombre nunca
+// llegaría a redirigir.
+var reservedAliases = map[string]bool{"api": true, "health": true}
+
+// NewLink son los datos para crear un enlace. Alias es opcional: si está
+// vacío se genera un código aleatorio.
+type NewLink struct {
+	URL   string
+	Alias string
+}
 
 // Link es un enlace corto y la URL a la que apunta.
 type Link struct {
@@ -55,11 +74,16 @@ func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
-// Create valida la URL y guarda un enlace con un código nuevo.
-func (s *Service) Create(ctx context.Context, rawURL string) (Link, error) {
-	target, err := validateURL(rawURL)
+// Create valida los datos y guarda un enlace con el alias pedido o con un
+// código nuevo.
+func (s *Service) Create(ctx context.Context, input NewLink) (Link, error) {
+	target, err := validateURL(input.URL)
 	if err != nil {
 		return Link{}, err
+	}
+
+	if input.Alias != "" {
+		return s.createWithAlias(ctx, target, input.Alias)
 	}
 
 	// Una colisión es muy improbable, pero se reintenta con otro código.
@@ -79,6 +103,24 @@ func (s *Service) Create(ctx context.Context, rawURL string) (Link, error) {
 		}
 	}
 	return Link{}, fmt.Errorf("sin código libre tras %d intentos: %w", maxAttempts, ErrCodeExists)
+}
+
+// createWithAlias guarda el enlace con el código que eligió el usuario.
+// No se reintenta: si el alias está ocupado, el usuario debe elegir otro.
+func (s *Service) createWithAlias(ctx context.Context, target, alias string) (Link, error) {
+	if err := validateAlias(alias); err != nil {
+		return Link{}, err
+	}
+
+	link := Link{Code: alias, URL: target, CreatedAt: time.Now().UTC()}
+	err := s.store.Save(ctx, link)
+	if errors.Is(err, ErrCodeExists) {
+		return Link{}, ErrAliasTaken
+	}
+	if err != nil {
+		return Link{}, fmt.Errorf("guardar enlace: %w", err)
+	}
+	return link, nil
 }
 
 // Resolve busca el enlace asociado a un código sin contar un clic.
@@ -113,6 +155,15 @@ func validateURL(rawURL string) (string, error) {
 		return "", ErrInvalidURL
 	}
 	return trimmed, nil
+}
+
+// validateAlias acepta solo alias con el formato permitido y que no
+// coincidan con una ruta del servidor.
+func validateAlias(alias string) error {
+	if !aliasPattern.MatchString(alias) || reservedAliases[strings.ToLower(alias)] {
+		return ErrInvalidAlias
+	}
+	return nil
 }
 
 // generateCode crea un código aleatorio de letras y números.
