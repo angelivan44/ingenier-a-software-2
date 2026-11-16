@@ -99,6 +99,7 @@
       <div class="acciones">
         <button id="copiar" class="secundario" type="button">Copiar</button>
         <button id="ver-clics" class="secundario" type="button">Ver clics</button>
+        <button id="eliminar" class="secundario" type="button">Eliminar</button>
         <span id="clics"></span>
       </div>
     </section>
@@ -112,6 +113,7 @@
     const copiar = document.getElementById("copiar");
     const clics = document.getElementById("clics");
     let codigo = "";
+    let token = "";
 
     function mostrarError(mensaje) {
       error.textContent = mensaje;
@@ -140,6 +142,7 @@
           }),
         });
         codigo = creado.code;
+        token = creado.delete_token;
         enlace.href = creado.short_url;
         enlace.textContent = creado.short_url;
         clics.textContent = "";
@@ -165,6 +168,21 @@
         clics.textContent = datos.clicks === 1 ? "1 clic" : datos.clicks + " clics";
       } catch (e) {
         mostrarError(e.message || "No se pudieron consultar los clics.");
+      }
+    });
+
+    document.getElementById("eliminar").addEventListener("click", async () => {
+      error.hidden = true;
+      try {
+        const respuesta = await fetch("/api/links/" + codigo, {
+          method: "DELETE",
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (!respuesta.ok) throw new Error((await respuesta.json()).error);
+        resultado.hidden = true;
+        formulario.reset();
+      } catch (e) {
+        mostrarError(e.message || "No se pudo eliminar el enlace.");
       }
     });
   </script>

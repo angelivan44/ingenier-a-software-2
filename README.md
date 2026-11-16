@@ -45,8 +45,10 @@ curl -X POST http://localhost:3000/api/links \
 Respuesta (`201 Created`):
 
 ```json
-{"code":"aZ3kP9q","url":"https://example.com/articulo","short_url":"http://localhost:3000/aZ3kP9q","clicks":0,"created_at":"2026-11-01T19:00:00Z"}
+{"code":"aZ3kP9q","url":"https://example.com/articulo","short_url":"http://localhost:3000/aZ3kP9q","clicks":0,"created_at":"2026-11-01T19:00:00Z","delete_token":"Xq8...k2"}
 ```
+
+`delete_token` solo se entrega en esta respuesta: guárdalo si quieres eliminar el enlace después.
 
 Si la URL no es `http` o `https`, o no incluye dominio, responde `400 Bad Request`.
 
@@ -71,6 +73,15 @@ Consultar los datos y los clics de un enlace. Esta consulta no suma clics, y tam
 ```bash
 curl http://localhost:3000/api/links/aZ3kP9q
 ```
+
+Eliminar un enlace con el token que se recibió al crearlo. Responde `204 No Content`. Sin token responde `401 Unauthorized`, con un token incorrecto `403 Forbidden` y si el código no existe `404 Not Found`:
+
+```bash
+curl -i -X DELETE http://localhost:3000/api/links/aZ3kP9q \
+  -H "Authorization: Bearer Xq8...k2"
+```
+
+Los enlaces creados antes de esta función no tienen token y no se pueden eliminar.
 
 ## Almacenamiento
 
