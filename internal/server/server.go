@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bytes"
 	_ "embed" // Permite incluir index.html dentro del binario.
 	"encoding/json"
 	"errors"
@@ -36,8 +37,55 @@ func New(service *links.Service) http.Handler {
 	mux.HandleFunc("GET /api/links/{code}", s.linkStats)
 	mux.HandleFunc("DELETE /api/links/{code}", s.deleteLink)
 	mux.HandleFunc("GET /{code}", s.redirect)
-	return mux
+	return jsonErrors(mux)
 }
+
+// jsonErrors hace que las rutas y métodos que no existen respondan JSON como
+// el resto de la API. Sin esto, ServeMux responde texto plano.
+func jsonErrors(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// Ninguna ruta coincide: se deja responder al enrutador en un
+		// registro para conocer el código y la cabecera Allow.
+		rec := &responseRecord{header: http.Header{}, status: http.StatusOK}
+		mux.ServeHTTP(rec, r)
+
+		switch rec.status {
+		case http.StatusNotFound:
+			writeError(w, http.StatusNotFound, "ruta no encontrada")
+		case http.StatusMethodNotAllowed:
+			w.Header().Set("Allow", rec.header.Get("Allow"))
+			writeError(w, http.StatusMethodNotAllowed, "método no permitido")
+		default:
+			// Otras respuestas del enrutador, como la redirección de rutas
+			// con barras repetidas, se envían tal cual.
+			for key, values := range rec.header {
+				w.Header()[key] = values
+			}
+			w.WriteHeader(rec.status)
+			if _, err := w.Write(rec.body.Bytes()); err != nil {
+				log.Printf("no se pudo escribir la respuesta: %v", err)
+			}
+		}
+	})
+}
+
+// responseRecord guarda una respuesta en memoria en lugar de enviarla.
+type responseRecord struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (r *responseRecord) Header() http.Header { return r.header }
+
+func (r *responseRecord) WriteHeader(status int) { r.status = status }
+
+func (r *responseRecord) Write(b []byte) (int, error) { return r.body.Write(b) }
 
 // home muestra la página para crear enlaces desde el navegador.
 func (s *Server) home(w http.ResponseWriter, _ *http.Request) {

@@ -526,3 +526,15 @@ func TestRutasDesconocidasRespondenJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestRedireccionesDelEnrutadorSeConservan(t *testing.T) {
+	// ServeMux redirige las rutas con barras repetidas a su forma limpia.
+	req := httptest.NewRequest(http.MethodGet, "//health", nil)
+	req.Host = testHost
+	rec := httptest.NewRecorder()
+	newTestHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/health" {
+		t.Fatalf("respuesta = %d %q, se esperaba 301 a /health", rec.Code, rec.Header().Get("Location"))
+	}
+}
