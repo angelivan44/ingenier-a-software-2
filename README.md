@@ -62,6 +62,14 @@ curl -X POST http://localhost:3000/api/links \
 
 El alias debe tener de 3 a 30 letras, números, guiones o guiones bajos, y no puede ser `api` ni `health`. Si no cumple, responde `400 Bad Request`; si otro enlace ya lo usa, `409 Conflict`.
 
+Para que el enlace venza, envía `expires_in_days` entre 1 y 365. La respuesta incluye `expires_at`; desde ese momento abrir el enlace responde `410 Gone`, aunque la consulta de clics sigue disponible. Si no se envía, o es `0`, el enlace no vence. Fuera de rango responde `400 Bad Request`:
+
+```bash
+curl -X POST http://localhost:3000/api/links \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/oferta","expires_in_days":7}'
+```
+
 Abrir un enlace corto redirige a la URL original (`302 Found`). Si el código no existe, responde `404 Not Found`:
 
 ```bash
