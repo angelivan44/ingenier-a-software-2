@@ -5,6 +5,7 @@ import (
 	_ "embed" // Permite incluir index.html dentro del binario.
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -88,8 +89,8 @@ func newLinkResponse(r *http.Request, link links.Link) linkResponse {
 func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 	var req createLinkRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "el cuerpo debe ser JSON con el campo url")
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "el cuerpo debe ser un solo objeto JSON con el campo url")
 		return
 	}
 
@@ -191,6 +192,20 @@ func baseURL(r *http.Request) string {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host
+}
+
+// decodeJSON lee un único valor JSON. Decode solo lee el primero, así que
+// después se exige el fin del cuerpo: datos extra indican una petición mal
+// formada. Los espacios y saltos de línea al final se permiten.
+func decodeJSON(body io.Reader, dst any) error {
+	decoder := json.NewDecoder(body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("hay datos después del JSON")
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
