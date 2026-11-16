@@ -132,6 +132,14 @@ Para un despliegue propio, crea un proyecto en Vercel desde este repositorio y d
 go test ./...
 ```
 
+Las pruebas están junto al código que prueban:
+
+- `internal/links/links_test.go`: reglas de negocio (URL, alias, expiración, eliminación y clics).
+- `internal/links/postgres_test.go`: almacenamiento en Postgres.
+- `internal/server/server_test.go`: rutas HTTP y respuestas de la API.
+
+El plan de pruebas, con los casos de caja negra y caja blanca, está en [`docs/calidad/plan-de-pruebas.md`](docs/calidad/plan-de-pruebas.md). Los defectos encontrados están en [`docs/calidad/defectos.md`](docs/calidad/defectos.md) y en los Issues del repositorio.
+
 Las pruebas de Postgres se omiten si no se define `TEST_DATABASE_URL`. Usa una base de pruebas, no la de producción:
 
 ```bash
