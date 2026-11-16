@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/angelivan44/ingenier-a-software-2/internal/links"
@@ -32,6 +33,7 @@ func New(service *links.Service) http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/links", s.createLink)
 	mux.HandleFunc("GET /api/links/{code}", s.linkStats)
+	mux.HandleFunc("DELETE /api/links/{code}", s.deleteLink)
 	mux.HandleFunc("GET /{code}", s.redirect)
 	return mux
 }
@@ -50,7 +52,9 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createLinkRequest struct {
-	URL string `json:"url"`
+	URL           string `json:"url"`
+	Alias         string `json:"alias"`
+	ExpiresInDays int    `json:"expires_in_days"`
 }
 
 type linkResponse struct {
@@ -59,19 +63,28 @@ type linkResponse struct {
 	ShortURL  string    `json:"short_url"`
 	Clicks    int64     `json:"clicks"`
 	CreatedAt time.Time `json:"created_at"`
+	// ExpiresAt se omite si el enlace no vence.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// DeleteToken solo se envía al crear el enlace.
+	DeleteToken string `json:"delete_token,omitempty"`
 }
 
 func newLinkResponse(r *http.Request, link links.Link) linkResponse {
-	return linkResponse{
+	response := linkResponse{
 		Code:      link.Code,
 		URL:       link.URL,
 		ShortURL:  baseURL(r) + "/" + link.Code,
 		Clicks:    link.Clicks,
 		CreatedAt: link.CreatedAt,
 	}
+	if !link.ExpiresAt.IsZero() {
+		response.ExpiresAt = &link.ExpiresAt
+	}
+	return response
 }
 
-// createLink recibe una URL y responde con su enlace corto.
+// createLink recibe una URL, y opcionalmente un alias, y responde con su
+// enlace corto.
 func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 	var req createLinkRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -80,9 +93,19 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := s.links.Create(r.Context(), req.URL)
-	if errors.Is(err, links.ErrInvalidURL) {
+	link, err := s.links.Create(r.Context(), links.NewLink{
+		URL:           req.URL,
+		Alias:         req.Alias,
+		ExpiresInDays: req.ExpiresInDays,
+		ServiceHost:   r.Host,
+	})
+	if errors.Is(err, links.ErrInvalidURL) || errors.Is(err, links.ErrInvalidAlias) ||
+		errors.Is(err, links.ErrInvalidExpiration) || errors.Is(err, links.ErrSelfLink) {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, links.ErrAliasTaken) {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
@@ -91,10 +114,34 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, newLinkResponse(r, link))
+	response := newLinkResponse(r, link)
+	response.DeleteToken = link.DeleteToken
+	writeJSON(w, http.StatusCreated, response)
 }
 
-// linkStats muestra los datos de un enlace sin contarlo como clic.
+// deleteLink elimina un enlace si la petición trae el token que se entregó
+// al crearlo, en la cabecera Authorization: Bearer <token>.
+func (s *Server) deleteLink(w http.ResponseWriter, r *http.Request) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || strings.TrimSpace(token) == "" {
+		writeError(w, http.StatusUnauthorized, "falta el token para eliminar el enlace")
+		return
+	}
+
+	err := s.links.Delete(r.Context(), r.PathValue("code"), strings.TrimSpace(token))
+	if errors.Is(err, links.ErrForbidden) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeLookupError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// linkStats muestra los datos de un enlace sin contarlo como clic. También
+// responde para enlaces vencidos, así el dueño puede ver sus clics.
 func (s *Server) linkStats(w http.ResponseWriter, r *http.Request) {
 	link, err := s.links.Resolve(r.Context(), r.PathValue("code"))
 	if err != nil {
@@ -109,7 +156,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	// Una petición HEAD solo comprueba el enlace: nadie lo visitó de verdad.
 	lookup := s.links.Visit
 	if r.Method == http.MethodHead {
-		lookup = s.links.Resolve
+		lookup = s.links.Check
 	}
 
 	link, err := lookup(r.Context(), r.PathValue("code"))
@@ -127,6 +174,10 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 func writeLookupError(w http.ResponseWriter, err error) {
 	if errors.Is(err, links.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "enlace no encontrado")
+		return
+	}
+	if errors.Is(err, links.ErrExpired) {
+		writeError(w, http.StatusGone, err.Error())
 		return
 	}
 	log.Printf("no se pudo obtener el enlace: %v", err)

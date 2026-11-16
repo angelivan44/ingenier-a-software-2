@@ -6,6 +6,8 @@
 
 # Cobertura de pruebas
 *.out
+coverage.txt
+coverage.html
 
 # Variables de entorno: nunca subir credenciales
 .env

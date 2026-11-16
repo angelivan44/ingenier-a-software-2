@@ -45,10 +45,30 @@ curl -X POST http://localhost:3000/api/links \
 Respuesta (`201 Created`):
 
 ```json
-{"code":"aZ3kP9q","url":"https://example.com/articulo","short_url":"http://localhost:3000/aZ3kP9q","clicks":0,"created_at":"2026-11-01T19:00:00Z"}
+{"code":"aZ3kP9q","url":"https://example.com/articulo","short_url":"http://localhost:3000/aZ3kP9q","clicks":0,"created_at":"2026-11-01T19:00:00Z","delete_token":"Xq8...k2"}
 ```
 
-Si la URL no es `http` o `https`, o no incluye dominio, responde `400 Bad Request`.
+`delete_token` solo se entrega en esta respuesta: guárdalo si quieres eliminar el enlace después.
+
+Si la URL no es `http` o `https`, no incluye dominio o lleva usuario y contraseña (`https://usuario:clave@...`), responde `400 Bad Request`. También se rechaza una URL hacia el mismo dominio del acortador, porque crearía redirecciones en cadena.
+
+Para elegir el código, envía un `alias` opcional:
+
+```bash
+curl -X POST http://localhost:3000/api/links \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/articulo","alias":"mi-promo"}'
+```
+
+El alias debe tener de 3 a 30 letras, números, guiones o guiones bajos, y no puede ser `api` ni `health`. Si no cumple, responde `400 Bad Request`; si otro enlace ya lo usa, `409 Conflict`.
+
+Para que el enlace venza, envía `expires_in_days` entre 1 y 365. La respuesta incluye `expires_at`; desde ese momento abrir el enlace responde `410 Gone`, aunque la consulta de clics sigue disponible. Si no se envía, o es `0`, el enlace no vence. Fuera de rango responde `400 Bad Request`:
+
+```bash
+curl -X POST http://localhost:3000/api/links \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/oferta","expires_in_days":7}'
+```
 
 Abrir un enlace corto redirige a la URL original (`302 Found`). Si el código no existe, responde `404 Not Found`:
 
@@ -61,6 +81,15 @@ Consultar los datos y los clics de un enlace. Esta consulta no suma clics, y tam
 ```bash
 curl http://localhost:3000/api/links/aZ3kP9q
 ```
+
+Eliminar un enlace con el token que se recibió al crearlo. Responde `204 No Content`. Sin token responde `401 Unauthorized`, con un token incorrecto `403 Forbidden` y si el código no existe `404 Not Found`:
+
+```bash
+curl -i -X DELETE http://localhost:3000/api/links/aZ3kP9q \
+  -H "Authorization: Bearer Xq8...k2"
+```
+
+Los enlaces creados antes de esta función no tienen token y no se pueden eliminar.
 
 ## Almacenamiento
 
@@ -109,6 +138,23 @@ Las pruebas de Postgres se omiten si no se define `TEST_DATABASE_URL`. Usa una b
 TEST_DATABASE_URL="postgres://usuario:clave@localhost:5432/acortador_test" go test ./...
 ```
 
+Para ver la cobertura por función y un reporte en el navegador:
+
+```bash
+go test -coverprofile=coverage.out ./internal/...
+go tool cover -func=coverage.out
+go tool cover -html=coverage.out
+```
+
 ## Integración continua
 
-Cada push a `main` o `develop` ejecuta el workflow `.github/workflows/ci.yml`, que revisa el formato, analiza el código con `go vet` y `golangci-lint`, corre las pruebas con el detector de condiciones de carrera y compila el servidor.
+Cada push a `main` o `develop`, y cada pull request hacia esas ramas, ejecuta el workflow `.github/workflows/ci.yml`. El workflow:
+
+1. Instala las dependencias.
+2. Revisa el formato y analiza el código con `go vet` y `golangci-lint`.
+3. Corre las pruebas con el detector de condiciones de carrera, contra un Postgres temporal.
+4. Publica la cobertura en el resumen de la ejecución y la sube como artefacto `reporte-cobertura`.
+5. Falla si la cobertura total es menor al 70 %.
+6. Compila el servidor.
+
+Si una prueba falla o la cobertura no llega al mínimo, la ejecución queda en rojo. Como `main` y `develop` están protegidas y exigen que el check pase, ese pull request no se puede fusionar hasta corregirlo.

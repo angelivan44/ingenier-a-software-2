@@ -25,6 +25,8 @@ func (m *MemoryStore) Save(_ context.Context, link Link) error {
 	if _, exists := m.links[link.Code]; exists {
 		return ErrCodeExists
 	}
+	// El token en claro no se guarda, igual que en Postgres.
+	link.DeleteToken = ""
 	m.links[link.Code] = link
 	return nil
 }
@@ -53,4 +55,16 @@ func (m *MemoryStore) IncrementClicks(_ context.Context, code string) (Link, err
 	link.Clicks++
 	m.links[code] = link
 	return link, nil
+}
+
+// Delete borra el enlace o devuelve ErrNotFound si el código no existe.
+func (m *MemoryStore) Delete(_ context.Context, code string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.links[code]; !exists {
+		return ErrNotFound
+	}
+	delete(m.links, code)
+	return nil
 }
